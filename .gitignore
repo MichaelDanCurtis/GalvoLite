@@ -1,0 +1,21 @@
+# Rust
+/target
+Cargo.lock.bak
+**/*.rs.bk
+
+# macOS
+.DS_Store
+
+# Environment
+.env
+.env.local
+
+# GalvoLite runtime data (not source)
+.galvolite/worktrees/
+.galvolite/handoffs/
+# (we commit .galvolite/plan.md and .galvolite/seeds/ selectively; those do not apply in this repo)
+
+# IDE
+.idea/
+.vscode/
+*.swp
