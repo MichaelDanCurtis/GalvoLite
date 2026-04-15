@@ -1,0 +1,82 @@
+use chrono::Utc;
+use galvolite::db::{Db, NewProject, NewSession, Project, Session, SessionState};
+use tempfile::TempDir;
+use uuid::Uuid;
+
+fn open_db() -> (TempDir, Db) {
+    let tmp = TempDir::new().unwrap();
+    let db = Db::open(tmp.path().join("t.db")).unwrap();
+    (tmp, db)
+}
+
+#[test]
+fn insert_and_fetch_project() {
+    let (_tmp, db) = open_db();
+    let p = db.insert_project(NewProject {
+        name: "Galvo".into(),
+        path: "/tmp/galvo".into(),
+        remote_url: None,
+    }).unwrap();
+
+    let fetched: Project = db.get_project(p.id).unwrap();
+    assert_eq!(fetched.name, "Galvo");
+    assert_eq!(fetched.path, "/tmp/galvo");
+}
+
+#[test]
+fn insert_session_starts_in_spawning() {
+    let (_tmp, db) = open_db();
+    let proj = db.insert_project(NewProject {
+        name: "p".into(), path: "/tmp/p".into(), remote_url: None,
+    }).unwrap();
+
+    let s = db.insert_session(NewSession {
+        project_id: proj.id,
+        role: "implementation".into(),
+        branch: Some("main".into()),
+        worktree_path: "/tmp/p".into(),
+        task_summary: "test".into(),
+        parent_session_id: None,
+    }).unwrap();
+
+    assert_eq!(s.state, SessionState::Spawning);
+    let fetched = db.get_session(s.id).unwrap();
+    assert_eq!(fetched.task_summary, "test");
+}
+
+#[test]
+fn update_session_state_persists() {
+    let (_tmp, db) = open_db();
+    let proj = db.insert_project(NewProject {
+        name: "p".into(), path: "/tmp/p".into(), remote_url: None,
+    }).unwrap();
+    let s = db.insert_session(NewSession {
+        project_id: proj.id, role: "implementation".into(),
+        branch: None, worktree_path: "/tmp/p".into(),
+        task_summary: "t".into(), parent_session_id: None,
+    }).unwrap();
+
+    db.update_session_state(s.id, SessionState::Working).unwrap();
+    let fetched: Session = db.get_session(s.id).unwrap();
+    assert_eq!(fetched.state, SessionState::Working);
+}
+
+#[test]
+fn record_signal_and_list() {
+    let (_tmp, db) = open_db();
+    let proj = db.insert_project(NewProject {
+        name: "p".into(), path: "/tmp/p".into(), remote_url: None,
+    }).unwrap();
+    let s = db.insert_session(NewSession {
+        project_id: proj.id, role: "implementation".into(),
+        branch: None, worktree_path: "/tmp/p".into(),
+        task_summary: "t".into(), parent_session_id: None,
+    }).unwrap();
+
+    db.record_signal(s.id, None, "STATUS:WORKING", None).unwrap();
+    db.record_signal(s.id, None, "HANDOFF:READY", None).unwrap();
+
+    let signals = db.list_signals_for_session(s.id).unwrap();
+    assert_eq!(signals.len(), 2);
+    assert_eq!(signals[0].kind, "STATUS:WORKING");
+}
