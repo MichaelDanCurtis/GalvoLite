@@ -1,1 +1,14 @@
+//! GalvoLite ritual engine — library crate.
+//!
+//! See `docs/superpowers/specs/2026-04-15-galvolite-design.md` for the product spec
+//! and `docs/superpowers/plans/2026-04-15-plan-1a-ritual-engine.md` for this plan.
 
+pub mod claude_md;
+pub mod db;
+pub mod error;
+pub mod handoff;
+pub mod pty;
+pub mod ritual;
+pub mod signals;
+
+pub use error::{Error, Result};
