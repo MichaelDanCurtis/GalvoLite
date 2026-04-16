@@ -10,7 +10,7 @@ const VALID_HANDOFF: &str = "\
 ## Current State\ncontent\n\
 ## Decisions Made\ncontent\n\
 ## Modified Files\ncontent\n\
-## Open Questions\ncontent\n\
+## Open Questions / Blockers\ncontent\n\
 ## Next Steps\ncontent\n\
 ## Critical Context\ncontent\n\
 ## Git State\ncontent\n\

@@ -66,6 +66,30 @@ impl Db {
     }
 }
 
+// ---------- helpers ----------
+
+fn parse_uuid(s: &str) -> rusqlite::Result<Uuid> {
+    Uuid::parse_str(s).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            Box::new(e),
+        )
+    })
+}
+
+fn parse_datetime(s: &str) -> rusqlite::Result<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                Box::new(e),
+            )
+        })
+}
+
 // ---------- types ----------
 
 #[derive(Debug, Clone)]
@@ -200,13 +224,11 @@ impl Db {
             params![id.to_string()],
             |r| {
                 Ok(Project {
-                    id: Uuid::parse_str(&r.get::<_, String>(0)?).unwrap(),
+                    id: parse_uuid(&r.get::<_, String>(0)?)?,
                     name: r.get(1)?,
                     path: r.get(2)?,
                     remote_url: r.get(3)?,
-                    created_at: DateTime::parse_from_rfc3339(&r.get::<_, String>(4)?)
-                        .unwrap()
-                        .with_timezone(&Utc),
+                    created_at: parse_datetime(&r.get::<_, String>(4)?)?,
                 })
             },
         )?;
@@ -221,13 +243,11 @@ impl Db {
         let rows = stmt
             .query_map([], |r| {
                 Ok(Project {
-                    id: Uuid::parse_str(&r.get::<_, String>(0)?).unwrap(),
+                    id: parse_uuid(&r.get::<_, String>(0)?)?,
                     name: r.get(1)?,
                     path: r.get(2)?,
                     remote_url: r.get(3)?,
-                    created_at: DateTime::parse_from_rfc3339(&r.get::<_, String>(4)?)
-                        .unwrap()
-                        .with_timezone(&Utc),
+                    created_at: parse_datetime(&r.get::<_, String>(4)?)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -283,25 +303,35 @@ impl Db {
              FROM sessions WHERE id = ?1",
             params![id.to_string()],
             |r| {
+                let state_str = r.get::<_, String>(6)?;
+                let state = SessionState::from_str(&state_str).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        6,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e}"))),
+                    )
+                })?;
+                let parent = match r.get::<_, Option<String>>(8)? {
+                    Some(s) => Some(parse_uuid(&s)?),
+                    None => None,
+                };
+                let ended = match r.get::<_, Option<String>>(11)? {
+                    Some(s) => Some(parse_datetime(&s)?),
+                    None => None,
+                };
                 Ok(Session {
-                    id: Uuid::parse_str(&r.get::<_, String>(0)?).unwrap(),
-                    project_id: Uuid::parse_str(&r.get::<_, String>(1)?).unwrap(),
+                    id: parse_uuid(&r.get::<_, String>(0)?)?,
+                    project_id: parse_uuid(&r.get::<_, String>(1)?)?,
                     role: r.get(2)?,
                     branch: r.get(3)?,
                     worktree_path: r.get(4)?,
                     pty_pid: r.get(5)?,
-                    state: SessionState::from_str(&r.get::<_, String>(6)?).unwrap(),
+                    state,
                     autopilot: r.get::<_, i64>(7)? != 0,
-                    parent_session_id: r
-                        .get::<_, Option<String>>(8)?
-                        .map(|s| Uuid::parse_str(&s).unwrap()),
+                    parent_session_id: parent,
                     task_summary: r.get(9)?,
-                    created_at: DateTime::parse_from_rfc3339(&r.get::<_, String>(10)?)
-                        .unwrap()
-                        .with_timezone(&Utc),
-                    ended_at: r
-                        .get::<_, Option<String>>(11)?
-                        .map(|s| DateTime::parse_from_rfc3339(&s).unwrap().with_timezone(&Utc)),
+                    created_at: parse_datetime(&r.get::<_, String>(10)?)?,
+                    ended_at: ended,
                 })
             },
         )
@@ -318,7 +348,7 @@ impl Db {
         )?;
         let ids = stmt
             .query_map([], |r| {
-                Ok(Uuid::parse_str(&r.get::<_, String>(0)?).unwrap())
+                parse_uuid(&r.get::<_, String>(0)?)
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         ids.into_iter().map(|id| self.get_session(id)).collect()
@@ -416,17 +446,17 @@ impl Db {
         )?;
         let rows = stmt
             .query_map(params![session_id.to_string()], |r| {
+                let cycle = match r.get::<_, Option<String>>(2)? {
+                    Some(s) => Some(parse_uuid(&s)?),
+                    None => None,
+                };
                 Ok(SignalRow {
                     id: r.get(0)?,
-                    session_id: Uuid::parse_str(&r.get::<_, String>(1)?).unwrap(),
-                    cycle_id: r
-                        .get::<_, Option<String>>(2)?
-                        .map(|s| Uuid::parse_str(&s).unwrap()),
+                    session_id: parse_uuid(&r.get::<_, String>(1)?)?,
+                    cycle_id: cycle,
                     kind: r.get(3)?,
                     payload: r.get(4)?,
-                    at: DateTime::parse_from_rfc3339(&r.get::<_, String>(5)?)
-                        .unwrap()
-                        .with_timezone(&Utc),
+                    at: parse_datetime(&r.get::<_, String>(5)?)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;

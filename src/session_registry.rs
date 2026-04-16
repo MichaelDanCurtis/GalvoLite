@@ -35,6 +35,15 @@ pub async fn listen(
         std::fs::create_dir_all(parent)
             .map_err(|e| crate::error::Error::io(parent, e))?;
     }
+    // macOS sun_path is 104 bytes; Linux is 108. Check before bind.
+    let path_len = path.as_os_str().len();
+    if path_len > 100 {
+        return Err(crate::error::Error::Config(format!(
+            "socket path too long ({path_len} bytes, max ~100): {}. \
+             Use --data-dir with a shorter path.",
+            path.display()
+        )));
+    }
     let _ = std::fs::remove_file(path);
     UnixListener::bind(path).map_err(|e| crate::error::Error::io(path, e))
 }

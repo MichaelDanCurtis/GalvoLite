@@ -46,9 +46,15 @@ pub struct RitualMachine {
     pub(crate) state: RitualState,
 }
 
+impl Default for RitualMachine {
+    fn default() -> Self {
+        Self { state: RitualState::Idle }
+    }
+}
+
 impl RitualMachine {
     pub fn new() -> Self {
-        Self { state: RitualState::Idle }
+        Self::default()
     }
 
     pub fn state(&self) -> &RitualState {
@@ -178,29 +184,26 @@ impl RitualDriver {
 
         // Drive follow-up side effects based on new state.
         let state = self.machine.lock().await.state().clone();
-        match (state, sig_clone) {
-            (RitualState::Clearing, Signal::HandoffReady) => {
-                if let Err(e) = self.validate_latest_handoff().await {
-                    self.fx
-                        .inject_prompt(&format!(
-                            "Handoff validation failed: {e}. Fix the handoff file and re-emit [HANDOFF:READY]."
-                        ))
-                        .await;
-                    // Revert to AwaitingHandoffReady so next HandoffReady retries.
-                    let mut m = self.machine.lock().await;
-                    m.state = RitualState::AwaitingHandoffReady;
-                    return;
-                }
-                self.fx.send_clear().await;
-                self.machine.lock().await.on_event(RitualEvent::ClearSent);
-                let restore = self.build_restore_prompt().await;
-                self.fx.inject_prompt(&restore).await;
-                self.machine
-                    .lock()
-                    .await
-                    .on_event(RitualEvent::RestorePromptSent);
+        if state == RitualState::Clearing && sig_clone == Signal::HandoffReady {
+            if let Err(e) = self.validate_latest_handoff().await {
+                self.fx
+                    .inject_prompt(&format!(
+                        "Handoff validation failed: {e}. Fix the handoff file and re-emit [HANDOFF:READY]."
+                    ))
+                    .await;
+                // Revert to AwaitingHandoffReady so next HandoffReady retries.
+                let mut m = self.machine.lock().await;
+                m.state = RitualState::AwaitingHandoffReady;
+                return;
             }
-            _ => {}
+            self.fx.send_clear().await;
+            self.machine.lock().await.on_event(RitualEvent::ClearSent);
+            let restore = self.build_restore_prompt().await;
+            self.fx.inject_prompt(&restore).await;
+            self.machine
+                .lock()
+                .await
+                .on_event(RitualEvent::RestorePromptSent);
         }
     }
 

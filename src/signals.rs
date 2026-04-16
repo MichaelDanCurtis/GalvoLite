@@ -126,7 +126,7 @@ impl LineBuffer {
 
         while let Some(nl) = self.pending.find('\n') {
             let line: String = self.pending.drain(..=nl).collect();
-            let trimmed = line.trim_end_matches(|c| c == '\n' || c == '\r');
+            let trimmed = line.trim_end_matches(['\n', '\r']);
             out.push(trimmed.to_string());
         }
         out

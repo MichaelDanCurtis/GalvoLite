@@ -77,7 +77,7 @@ fn main() {
         }
 
         // Restore prompt → heartbeat for new cycle
-        if line.contains("Read") && line.contains(".galvolite/handoffs") || line.contains("next cycle") {
+        if (line.contains("Read") && line.contains(".galvolite/handoffs")) || line.contains("next cycle") {
             writeln!(out, "mock: restored (cycle {cycle})").ok();
             writeln!(out, "[STATUS:WORKING]").ok();
             out.flush().ok();

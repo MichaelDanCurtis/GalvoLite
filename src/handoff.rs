@@ -53,7 +53,7 @@ pub const REQUIRED_SECTIONS: &[&str] = &[
     "Current State",
     "Decisions Made",
     "Modified Files",
-    "Open Questions",
+    "Open Questions / Blockers",
     "Next Steps",
     "Critical Context",
     "Git State",

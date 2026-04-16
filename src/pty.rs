@@ -153,6 +153,7 @@ use uuid::Uuid;
 /// Wraps a `PtyHandle`. Splits the stdout line stream into:
 ///   * a channel of human-readable output lines (for display)
 ///   * a channel of parsed signals (for the ritual driver)
+///
 /// Signals are persisted to the `signals` table as they arrive.
 pub struct SignalPump {
     signal_rx: mpsc::Receiver<Signal>,
@@ -206,8 +207,10 @@ impl SignalPump {
                     if signal_tx.send(sig).await.is_err() {
                         break;
                     }
-                } else if output_tx.send(line).await.is_err() {
-                    break;
+                } else {
+                    // Use try_send to avoid backpressure on the signal path
+                    // when nobody is consuming output (e.g. Plan 1a CLI).
+                    let _ = output_tx.try_send(line);
                 }
             }
         });
