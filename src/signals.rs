@@ -105,3 +105,34 @@ fn extract_quoted(s: &str, key: &str) -> Option<String> {
     }
     None
 }
+
+/// Buffers byte-stream chunks and yields complete lines.
+/// Handles partial reads and CRLF line endings.
+#[derive(Debug, Default)]
+pub struct LineBuffer {
+    pending: String,
+}
+
+impl LineBuffer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feed a chunk. Returns complete lines (in order). Incomplete trailing
+    /// content is retained for the next call.
+    pub fn feed(&mut self, chunk: &str) -> Vec<String> {
+        self.pending.push_str(chunk);
+        let mut out = Vec::new();
+
+        while let Some(nl) = self.pending.find('\n') {
+            let line: String = self.pending.drain(..=nl).collect();
+            let trimmed = line.trim_end_matches(|c| c == '\n' || c == '\r');
+            out.push(trimmed.to_string());
+        }
+        out
+    }
+
+    pub fn pending(&self) -> &str {
+        &self.pending
+    }
+}

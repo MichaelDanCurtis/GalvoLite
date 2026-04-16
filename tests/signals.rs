@@ -74,3 +74,37 @@ fn signal_kind_string_for_db() {
         "ATTENTION:NEEDED"
     );
 }
+
+use galvolite::signals::LineBuffer;
+
+#[test]
+fn line_buffer_accumulates_partial_reads() {
+    let mut buf = LineBuffer::new();
+    let a = buf.feed("hello");
+    assert!(a.is_empty());
+    let b = buf.feed(" world\n");
+    assert_eq!(b, vec!["hello world"]);
+}
+
+#[test]
+fn line_buffer_multiple_lines_in_one_feed() {
+    let mut buf = LineBuffer::new();
+    let lines = buf.feed("a\nb\nc\n");
+    assert_eq!(lines, vec!["a", "b", "c"]);
+}
+
+#[test]
+fn line_buffer_handles_crlf() {
+    let mut buf = LineBuffer::new();
+    let lines = buf.feed("one\r\ntwo\r\n");
+    assert_eq!(lines, vec!["one", "two"]);
+}
+
+#[test]
+fn line_buffer_keeps_trailing_incomplete_line() {
+    let mut buf = LineBuffer::new();
+    let a = buf.feed("done\nstill here");
+    assert_eq!(a, vec!["done"]);
+    let b = buf.feed("\n");
+    assert_eq!(b, vec!["still here"]);
+}
