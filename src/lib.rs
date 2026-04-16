@@ -10,6 +10,7 @@ pub mod error;
 pub mod handoff;
 pub mod pty;
 pub mod ritual;
+pub mod session_registry;
 pub mod signals;
 
 pub use error::{Error, Result};

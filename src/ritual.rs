@@ -96,12 +96,14 @@ use std::sync::Arc;
 pub trait SideEffects: Send + Sync + 'static {
     async fn inject_prompt(&self, prompt: &str);
     async fn send_clear(&self);
+    async fn inject_raw(&self, bytes: &[u8]);
 }
 
 #[derive(Debug, Clone)]
 pub enum DriverCommand {
     InjectPrompt(String),
     SendClear,
+    InjectRaw(Vec<u8>),
 }
 
 /// Test double: records commands to a channel.
@@ -122,6 +124,9 @@ impl SideEffects for MockSideEffects {
     }
     async fn send_clear(&self) {
         let _ = self.tx.send(DriverCommand::SendClear).await;
+    }
+    async fn inject_raw(&self, bytes: &[u8]) {
+        let _ = self.tx.send(DriverCommand::InjectRaw(bytes.to_vec())).await;
     }
 }
 
@@ -234,6 +239,10 @@ impl RitualDriver {
             .on_event(RitualEvent::AttentionResolved);
     }
 
+    pub async fn inject_raw(&self, bytes: &[u8]) {
+        self.fx.inject_raw(bytes).await;
+    }
+
     pub async fn abort(&self, reason: &str) {
         self.machine
             .lock()
@@ -266,5 +275,9 @@ impl SideEffects for PtySideEffects {
 
     async fn send_clear(&self) {
         let _ = self.pty.write_str("/clear\n").await;
+    }
+
+    async fn inject_raw(&self, bytes: &[u8]) {
+        let _ = self.pty.write(bytes).await;
     }
 }
