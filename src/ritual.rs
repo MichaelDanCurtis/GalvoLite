@@ -175,10 +175,19 @@ impl RitualDriver {
         let state = self.machine.lock().await.state().clone();
         match (state, sig_clone) {
             (RitualState::Clearing, Signal::HandoffReady) => {
+                if let Err(e) = self.validate_latest_handoff().await {
+                    self.fx
+                        .inject_prompt(&format!(
+                            "Handoff validation failed: {e}. Fix the handoff file and re-emit [HANDOFF:READY]."
+                        ))
+                        .await;
+                    // Revert to AwaitingHandoffReady so next HandoffReady retries.
+                    let mut m = self.machine.lock().await;
+                    m.state = RitualState::AwaitingHandoffReady;
+                    return;
+                }
                 self.fx.send_clear().await;
                 self.machine.lock().await.on_event(RitualEvent::ClearSent);
-
-                // Immediately inject restore prompt.
                 let restore = self.build_restore_prompt().await;
                 self.fx.inject_prompt(&restore).await;
                 self.machine
@@ -188,6 +197,19 @@ impl RitualDriver {
             }
             _ => {}
         }
+    }
+
+    /// After [HANDOFF:READY], driver calls this to confirm the file actually exists
+    /// and is well-formed. If validation fails, driver aborts with an error state.
+    pub async fn validate_latest_handoff(&self) -> std::result::Result<(), crate::error::Error> {
+        let path = self
+            .latest_handoff_path
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| crate::error::Error::Ritual("no handoff path recorded".into()))?;
+        let body = crate::handoff::read_handoff(std::path::Path::new(&path))?;
+        crate::handoff::validate_handoff_content(&body)
     }
 
     async fn build_restore_prompt(&self) -> String {
@@ -217,5 +239,32 @@ impl RitualDriver {
             .lock()
             .await
             .on_event(RitualEvent::Abort(reason.to_string()));
+    }
+}
+
+use crate::pty::PtyHandleShared;
+
+/// Production side effects: forwards to a pty handle.
+pub struct PtySideEffects {
+    pty: PtyHandleShared,
+}
+
+impl PtySideEffects {
+    pub fn new(pty: PtyHandleShared) -> Self {
+        Self { pty }
+    }
+}
+
+#[async_trait::async_trait]
+impl SideEffects for PtySideEffects {
+    async fn inject_prompt(&self, prompt: &str) {
+        // Claude Code's CLI accepts input on stdin terminated by Enter.
+        let mut buf = prompt.as_bytes().to_vec();
+        buf.push(b'\n');
+        let _ = self.pty.write(&buf).await;
+    }
+
+    async fn send_clear(&self) {
+        let _ = self.pty.write_str("/clear\n").await;
     }
 }
