@@ -27,8 +27,8 @@ pub struct PtyOpts {
 pub struct PtyHandle {
     pub pid: u32,
     stdout_rx: mpsc::Receiver<String>,
-    stdin_tx: mpsc::Sender<Vec<u8>>,
-    kill_flag: Arc<AtomicBool>,
+    pub(crate) stdin_tx: mpsc::Sender<Vec<u8>>,
+    pub(crate) kill_flag: Arc<AtomicBool>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
@@ -143,5 +143,92 @@ impl Drop for PtyHandle {
     fn drop(&mut self) {
         self.kill_flag.store(true, Ordering::Relaxed);
         let _ = self.child.kill();
+    }
+}
+
+use crate::db::Db;
+use crate::signals::{parse_signal, Signal};
+use uuid::Uuid;
+
+/// Wraps a `PtyHandle`. Splits the stdout line stream into:
+///   * a channel of human-readable output lines (for display)
+///   * a channel of parsed signals (for the ritual driver)
+/// Signals are persisted to the `signals` table as they arrive.
+pub struct SignalPump {
+    signal_rx: mpsc::Receiver<Signal>,
+    output_rx: mpsc::Receiver<String>,
+    handle: PtyHandleShared,
+    _task: tokio::task::JoinHandle<()>,
+}
+
+/// A clonable "write + kill" view of the underlying pty for the ritual driver.
+#[derive(Clone)]
+pub struct PtyHandleShared {
+    stdin_tx: mpsc::Sender<Vec<u8>>,
+    kill_flag: Arc<AtomicBool>,
+}
+
+impl PtyHandleShared {
+    pub async fn write(&self, bytes: &[u8]) -> Result<()> {
+        self.stdin_tx
+            .send(bytes.to_vec())
+            .await
+            .map_err(|_| Error::Pty("stdin channel closed".into()))
+    }
+
+    pub async fn write_str(&self, s: &str) -> Result<()> {
+        self.write(s.as_bytes()).await
+    }
+
+    pub fn kill(&self) {
+        self.kill_flag.store(true, Ordering::Relaxed);
+    }
+}
+
+impl SignalPump {
+    pub fn start(mut pty: PtyHandle, db: Db, session_id: Uuid) -> Self {
+        let (signal_tx, signal_rx) = mpsc::channel::<Signal>(64);
+        let (output_tx, output_rx) = mpsc::channel::<String>(256);
+        let shared = PtyHandleShared {
+            stdin_tx: pty.stdin_tx.clone(),
+            kill_flag: pty.kill_flag.clone(),
+        };
+
+        let task = tokio::spawn(async move {
+            while let Some(line) = pty.next_line().await {
+                if let Some(sig) = parse_signal(&line) {
+                    let _ = db.record_signal(
+                        session_id,
+                        None,
+                        sig.kind(),
+                        sig.payload().as_deref(),
+                    );
+                    if signal_tx.send(sig).await.is_err() {
+                        break;
+                    }
+                } else if output_tx.send(line).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        Self {
+            signal_rx,
+            output_rx,
+            handle: shared,
+            _task: task,
+        }
+    }
+
+    pub async fn next_signal(&mut self) -> Option<Signal> {
+        self.signal_rx.recv().await
+    }
+
+    pub async fn next_output(&mut self) -> Option<String> {
+        self.output_rx.recv().await
+    }
+
+    pub fn handle(&self) -> PtyHandleShared {
+        self.handle.clone()
     }
 }
