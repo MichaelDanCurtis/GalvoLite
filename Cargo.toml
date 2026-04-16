@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "fixtures/mock-claude"]
+
 [package]
 name = "galvolite"
 version = "0.1.0"
