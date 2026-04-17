@@ -366,6 +366,7 @@ dependencies = [
  "chrono",
  "clap",
  "dirs",
+ "libc",
  "once_cell",
  "portable-pty",
  "predicates",
