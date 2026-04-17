@@ -1,12 +1,16 @@
+import { Trash2 } from "lucide-react";
 import type { Project } from "../types";
 
 interface Props {
   projects: Project[];
   selected: string | null;
   onSelect: (id: string | null) => void;
+  onRemove?: (p: Project) => void;
 }
 
-export function ProjectSelector({ projects, selected, onSelect }: Props) {
+export function ProjectSelector({ projects, selected, onSelect, onRemove }: Props) {
+  const selectedProject = projects.find((p) => p.id === selected) ?? null;
+
   return (
     <div className="flex items-center gap-3">
       <label className="text-sm text-gray-400">Project:</label>
@@ -22,6 +26,19 @@ export function ProjectSelector({ projects, selected, onSelect }: Props) {
           </option>
         ))}
       </select>
+      {onRemove && selectedProject && (
+        <button
+          type="button"
+          className="text-neutral-500 hover:text-red-400"
+          aria-label={`Remove ${selectedProject.name}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove(selectedProject);
+          }}
+        >
+          <Trash2 size={14} />
+        </button>
+      )}
     </div>
   );
 }

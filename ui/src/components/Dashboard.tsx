@@ -1,15 +1,21 @@
 import { useState } from "react";
+import { Plus } from "lucide-react";
 import { useProjects } from "../hooks/useProjects";
 import { useSessions } from "../hooks/useSessions";
 import { ProjectSelector } from "./ProjectSelector";
 import { SessionRow } from "./SessionRow";
 import { SessionDetail } from "./SessionDetail";
+import { AddProjectModal } from "./modals/AddProjectModal";
+import { RemoveProjectModal } from "./modals/RemoveProjectModal";
+import type { Project } from "../types";
 
 export function Dashboard() {
-  const { projects } = useProjects();
+  const { projects, createProject, removeProject } = useProjects();
   const { sessions, refresh } = useSessions(2000);
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<Project | null>(null);
 
   const filtered = selectedProject
     ? sessions.filter((s) => s.project_id === selectedProject)
@@ -34,7 +40,15 @@ export function Dashboard() {
             projects={projects}
             selected={selectedProject}
             onSelect={setSelectedProject}
+            onRemove={setRemoveTarget}
           />
+          <button
+            type="button"
+            className="flex items-center gap-1 text-xs text-neutral-300 hover:text-neutral-100 border border-neutral-700 rounded px-2 py-1"
+            onClick={() => setAddOpen(true)}
+          >
+            <Plus size={12} /> Add Project
+          </button>
         </div>
         <div className="flex items-center gap-4 text-sm">
           <span className="text-gray-400">
@@ -73,6 +87,30 @@ export function Dashboard() {
           </div>
         )}
       </div>
+
+      <AddProjectModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onSubmit={(req) => createProject(req)}
+      />
+      <RemoveProjectModal
+        open={removeTarget !== null}
+        projectName={removeTarget?.name ?? ""}
+        sessionCount={
+          removeTarget
+            ? sessions.filter((s) => s.project_id === removeTarget.id).length
+            : 0
+        }
+        onClose={() => {
+          if (removeTarget && selectedProject === removeTarget.id) {
+            setSelectedProject(null);
+          }
+          setRemoveTarget(null);
+        }}
+        onConfirm={() =>
+          removeTarget ? removeProject(removeTarget.id) : Promise.resolve()
+        }
+      />
     </div>
   );
 }
