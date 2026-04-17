@@ -452,6 +452,20 @@ impl Db {
         Ok(())
     }
 
+    /// Set the `autopilot` flag on a session row.
+    /// Returns `Error::SessionNotFound` if no row was updated.
+    pub fn set_session_autopilot(&self, id: uuid::Uuid, enabled: bool) -> Result<()> {
+        let conn = self.pool.get()?;
+        let rows = conn.execute(
+            "UPDATE sessions SET autopilot = ?1 WHERE id = ?2",
+            params![enabled as i64, id.to_string()],
+        )?;
+        if rows == 0 {
+            return Err(Error::SessionNotFound(id));
+        }
+        Ok(())
+    }
+
     pub fn end_session(&self, id: Uuid, final_state: SessionState) -> Result<()> {
         let conn = self.pool.get()?;
         conn.execute(
