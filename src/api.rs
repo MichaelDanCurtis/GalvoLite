@@ -7,7 +7,7 @@ use crate::session_manager::SessionManager;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -23,6 +23,7 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route("/api/sessions/:id", get(get_session).delete(kill_session))
         .route("/api/sessions/:id/handoff", post(trigger_handoff))
         .route("/api/sessions/:id/send", post(send_to_session))
+        .route("/api/sessions/:id/autopilot", put(set_autopilot))
         .route("/api/sessions/:id/signals", get(get_signals))
         .route("/api/sessions/:id/terminal", get(terminal_ws))
         .layer(CorsLayer::permissive())
@@ -205,6 +206,22 @@ async fn send_to_session(
 ) -> Response {
     match mgr.send_to_session(id, req.text, req.newline).await {
         Ok(()) => Json(serde_json::json!({"status": "sent"})).into_response(),
+        Err(e) => err_to_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct AutopilotReq {
+    enabled: bool,
+}
+
+async fn set_autopilot(
+    State(mgr): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(req): Json<AutopilotReq>,
+) -> Response {
+    match mgr.set_autopilot(id, req.enabled).await {
+        Ok(()) => Json(serde_json::json!({"autopilot": req.enabled})).into_response(),
         Err(e) => err_to_response(e),
     }
 }
