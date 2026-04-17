@@ -247,30 +247,71 @@ async fn terminal_ws(
         Ok(rx) => rx,
         Err(e) => return err_to_response(e),
     };
-    ws.on_upgrade(move |socket| handle_terminal_ws(socket, rx))
+    ws.on_upgrade(move |socket| handle_terminal_ws(socket, rx, mgr, id))
         .into_response()
 }
 
+/// Client → server control frame format (JSON over `Message::Text`).
+///
+/// Currently only `resize` is recognized; unknown `type` values are ignored
+/// so the protocol can grow without breaking older clients.
+#[derive(serde::Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum ClientFrame {
+    Resize { cols: u16, rows: u16 },
+}
+
 async fn handle_terminal_ws(
-    mut socket: axum::extract::ws::WebSocket,
-    mut rx: tokio::sync::broadcast::Receiver<String>,
+    socket: axum::extract::ws::WebSocket,
+    mut rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
+    mgr: AppState,
+    session_id: uuid::Uuid,
 ) {
     use axum::extract::ws::Message;
-    loop {
-        match rx.recv().await {
-            Ok(line) => {
-                if socket.send(Message::Text(line)).await.is_err() {
-                    break;
+    use futures_util::{sink::SinkExt, stream::StreamExt};
+
+    // Split so we can concurrently forward PTY output AND read client
+    // control frames (resize). Before splitting, the single socket handle
+    // could only do one at a time.
+    let (mut sink, mut stream) = socket.split();
+
+    let writer = async move {
+        loop {
+            match rx.recv().await {
+                Ok(bytes) => {
+                    if sink.send(Message::Binary(bytes)).await.is_err() {
+                        break;
+                    }
                 }
-            }
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                let msg = format!("[galvolite: skipped {n} lines]");
-                if socket.send(Message::Text(msg)).await.is_err() {
-                    break;
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_n)) => {
+                    // Drop the frame-count marker — the terminal will redraw
+                    // from the child's next write. Don't break.
                 }
-                // fall through: next recv() returns post-lag messages; must not break
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }
+    };
+
+    let reader = async move {
+        while let Some(Ok(msg)) = stream.next().await {
+            match msg {
+                Message::Text(text) => {
+                    if let Ok(frame) = serde_json::from_str::<ClientFrame>(&text) {
+                        match frame {
+                            ClientFrame::Resize { cols, rows } => {
+                                let _ = mgr.resize_pty(session_id, cols, rows);
+                            }
+                        }
+                    }
+                }
+                Message::Close(_) => break,
+                _ => {}
+            }
+        }
+    };
+
+    tokio::select! {
+        _ = writer => {},
+        _ = reader => {},
     }
 }

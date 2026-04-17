@@ -20,7 +20,7 @@ use uuid::Uuid;
 struct RunningSession {
     driver: Arc<RitualDriver>,
     handle: PtyHandleShared,
-    output_tx: broadcast::Sender<String>,
+    output_tx: broadcast::Sender<Vec<u8>>,
     /// Current cycle id for this running session. Shared with the
     /// [`SignalPump`] recording task so rotation on STATUS:COMPLETE
     /// immediately re-attributes signals to the new cycle.
@@ -397,10 +397,20 @@ impl SessionManager {
         self.running.lock().unwrap().keys().copied().collect()
     }
 
-    pub fn subscribe_output(&self, id: Uuid) -> Result<broadcast::Receiver<String>> {
+    pub fn subscribe_output(&self, id: Uuid) -> Result<broadcast::Receiver<Vec<u8>>> {
         let running = self.running.lock().unwrap();
         let rs = running.get(&id).ok_or(Error::SessionNotRunning(id))?;
         Ok(rs.output_tx.subscribe())
+    }
+
+    /// Resize the underlying pty for a running session.
+    ///
+    /// Forwarded from the terminal WebSocket when the client reports a new
+    /// cell grid. The child process receives SIGWINCH and can redraw.
+    pub fn resize_pty(&self, id: Uuid, cols: u16, rows: u16) -> Result<()> {
+        let running = self.running.lock().unwrap();
+        let rs = running.get(&id).ok_or(Error::SessionNotRunning(id))?;
+        rs.handle.resize(cols, rows)
     }
 
     pub fn get_signals(&self, id: Uuid) -> Result<Vec<crate::db::SignalRow>> {

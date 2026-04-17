@@ -10,10 +10,10 @@
 
 use crate::error::{Error, Result};
 use crate::signals::LineBuffer;
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{broadcast, mpsc};
 
 #[derive(Debug, Clone)]
@@ -24,11 +24,17 @@ pub struct PtyOpts {
     pub env: Vec<(String, String)>,
 }
 
+/// Shared handle to the pty master, used for resize from the async world.
+/// Wrapped in a blocking mutex because `MasterPty` is not `Sync` in general.
+pub(crate) type SharedMaster = Arc<StdMutex<Box<dyn MasterPty + Send>>>;
+
 pub struct PtyHandle {
     pub pid: u32,
     stdout_rx: mpsc::Receiver<String>,
+    pub(crate) raw_output_tx: broadcast::Sender<Vec<u8>>,
     pub(crate) stdin_tx: mpsc::Sender<Vec<u8>>,
     pub(crate) kill_flag: Arc<AtomicBool>,
+    pub(crate) master: SharedMaster,
     child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
@@ -70,8 +76,17 @@ impl PtyHandle {
 
         let kill_flag = Arc::new(AtomicBool::new(false));
 
-        // Reader thread
+        // Reader thread. Splits a single byte stream into two consumers:
+        //   * `raw_output_tx` (broadcast): every byte verbatim, for the
+        //     terminal WebSocket — preserves ANSI/cursor sequences that
+        //     line-based reassembly would destroy.
+        //   * `stdout_tx` (mpsc): complete lines only, for the signal
+        //     parser in `SignalPump`.
+        // Signals still appear in the raw byte stream; the terminal sees
+        // them alongside other output, which matches PTY semantics.
         let (stdout_tx, stdout_rx) = mpsc::channel::<String>(256);
+        let (raw_output_tx, _) = broadcast::channel::<Vec<u8>>(1024);
+        let raw_tx_reader = raw_output_tx.clone();
         let kill_reader = kill_flag.clone();
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
@@ -80,6 +95,9 @@ impl PtyHandle {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
+                        // Broadcast raw bytes first so UI rendering is not
+                        // blocked by slow line-channel consumers.
+                        let _ = raw_tx_reader.send(buf[..n].to_vec());
                         let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
                         let lines = line_buf.feed(&chunk);
                         for line in lines {
@@ -105,11 +123,15 @@ impl PtyHandle {
             }
         });
 
+        let master = Arc::new(StdMutex::new(pair.master));
+
         Ok(Self {
             pid,
             stdout_rx,
+            raw_output_tx,
             stdin_tx,
             kill_flag,
+            master,
             child,
         })
     }
@@ -117,6 +139,12 @@ impl PtyHandle {
     /// Next complete line of stdout, or `None` if the stream has ended.
     pub async fn next_line(&mut self) -> Option<String> {
         self.stdout_rx.recv().await
+    }
+
+    /// Subscribe to the raw byte stream from the pty master.
+    /// Multiple subscribers are allowed; slow consumers see `Lagged`.
+    pub fn subscribe_raw_output(&self) -> broadcast::Receiver<Vec<u8>> {
+        self.raw_output_tx.subscribe()
     }
 
     /// Write bytes to the child's stdin (via pty master).
@@ -129,6 +157,21 @@ impl PtyHandle {
 
     pub async fn write_str(&self, s: &str) -> Result<()> {
         self.write(s.as_bytes()).await
+    }
+
+    /// Resize the pty. Forwarded to the OS so the child process receives
+    /// SIGWINCH and can redraw at the new dimensions.
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
+        self.master
+            .lock()
+            .unwrap()
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| Error::Pty(format!("resize: {e}")))
     }
 
     pub async fn kill(&mut self) -> Result<()> {
@@ -148,7 +191,6 @@ impl Drop for PtyHandle {
 
 use crate::db::Db;
 use crate::signals::{parse_signal, Signal};
-use std::sync::Mutex as StdMutex;
 use uuid::Uuid;
 
 /// Shared, mutable cycle-id slot threaded into [`SignalPump::start`].
@@ -156,24 +198,27 @@ use uuid::Uuid;
 /// (e.g. on STATUS:COMPLETE) correctly re-attributes subsequent signals.
 pub type CycleSlot = Arc<StdMutex<Option<Uuid>>>;
 
-/// Wraps a `PtyHandle`. Splits the stdout line stream into:
-///   * a broadcast channel of human-readable output lines (for display; multiple subscribers)
-///   * a channel of parsed signals (for the ritual driver)
+/// Wraps a `PtyHandle`. Runs a background task that reads complete lines from
+/// the pty, parses them for signals, persists signals to the db, and forwards
+/// parsed signals to the ritual driver via an mpsc channel.
 ///
-/// Signals are persisted to the `signals` table as they arrive.
+/// Terminal output is NOT re-broadcast here — the raw byte stream on
+/// `PtyHandle::raw_output_tx` is what the WebSocket serves. Signals therefore
+/// also appear verbatim in the terminal view (matching PTY semantics).
 pub struct SignalPump {
     signal_rx: mpsc::Receiver<Signal>,
-    output_tx: broadcast::Sender<String>,
+    raw_output_tx: broadcast::Sender<Vec<u8>>,
     handle: PtyHandleShared,
     _task: tokio::task::JoinHandle<()>,
 }
 
-/// A clonable "write + kill" view of the underlying pty for the ritual driver.
+/// A clonable "write + kill + resize" view of the underlying pty.
 #[derive(Clone)]
 pub struct PtyHandleShared {
     stdin_tx: mpsc::Sender<Vec<u8>>,
     kill_flag: Arc<AtomicBool>,
     pid: u32,
+    master: SharedMaster,
 }
 
 impl PtyHandleShared {
@@ -196,17 +241,30 @@ impl PtyHandleShared {
                 .status();
         }
     }
+
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
+        self.master
+            .lock()
+            .unwrap()
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| Error::Pty(format!("resize: {e}")))
+    }
 }
 
 impl SignalPump {
     pub fn start(mut pty: PtyHandle, db: Db, session_id: Uuid, cycle_id: CycleSlot) -> Self {
         let (signal_tx, signal_rx) = mpsc::channel::<Signal>(64);
-        let (output_tx, _) = broadcast::channel::<String>(1024);
-        let output_tx_clone = output_tx.clone();
+        let raw_output_tx = pty.raw_output_tx.clone();
         let shared = PtyHandleShared {
             stdin_tx: pty.stdin_tx.clone(),
             kill_flag: pty.kill_flag.clone(),
             pid: pty.pid,
+            master: pty.master.clone(),
         };
 
         let task = tokio::spawn(async move {
@@ -224,15 +282,13 @@ impl SignalPump {
                     if signal_tx.send(sig).await.is_err() {
                         break;
                     }
-                } else {
-                    let _ = output_tx_clone.send(line);
                 }
             }
         });
 
         Self {
             signal_rx,
-            output_tx,
+            raw_output_tx,
             handle: shared,
             _task: task,
         }
@@ -242,12 +298,12 @@ impl SignalPump {
         self.signal_rx.recv().await
     }
 
-    pub fn subscribe_output(&self) -> broadcast::Receiver<String> {
-        self.output_tx.subscribe()
+    pub fn subscribe_output(&self) -> broadcast::Receiver<Vec<u8>> {
+        self.raw_output_tx.subscribe()
     }
 
-    pub fn output_sender(&self) -> broadcast::Sender<String> {
-        self.output_tx.clone()
+    pub fn output_sender(&self) -> broadcast::Sender<Vec<u8>> {
+        self.raw_output_tx.clone()
     }
 
     pub fn handle(&self) -> PtyHandleShared {

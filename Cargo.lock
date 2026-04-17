@@ -1216,6 +1216,7 @@ dependencies = [
  "chrono",
  "clap",
  "dirs 5.0.1",
+ "futures-util",
  "libc",
  "once_cell",
  "portable-pty",
