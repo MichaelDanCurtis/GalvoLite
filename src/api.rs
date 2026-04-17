@@ -18,7 +18,7 @@ type AppState = Arc<SessionManager>;
 pub fn router(mgr: Arc<SessionManager>) -> Router {
     let api = Router::new()
         .route("/api/projects", get(list_projects).post(create_project))
-        .route("/api/projects/:id", get(get_project))
+        .route("/api/projects/:id", get(get_project).delete(delete_project))
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route("/api/sessions/:id", get(get_session).delete(kill_session))
         .route("/api/sessions/:id/handoff", post(trigger_handoff))
@@ -106,6 +106,16 @@ async fn get_project(
 ) -> Response {
     match mgr.get_project(id) {
         Ok(project) => Json(project).into_response(),
+        Err(e) => err_to_response(e),
+    }
+}
+
+async fn delete_project(
+    State(mgr): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Response {
+    match mgr.delete_project(id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err_to_response(e),
     }
 }
