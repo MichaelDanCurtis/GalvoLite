@@ -90,7 +90,7 @@ export function Dashboard() {
         <div className="flex-1 overflow-auto">
           {filtered.length === 0 ? (
             <div className="p-8 text-center text-gray-500">
-              No sessions. Start one via the API or CLI.
+              No sessions. Click <strong>Start Session</strong> to begin.
             </div>
           ) : (
             filtered.map((s) => (

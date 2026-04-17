@@ -16,6 +16,15 @@ if (typeof window !== "undefined" && !window.matchMedia) {
   })) as unknown as typeof window.matchMedia;
 }
 
+// useTerminal uses ResizeObserver for fit-on-resize; jsdom lacks it.
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+}
+
 // Framer Motion animations are not meaningful in jsdom.
 // Mock `motion.*` to regular DOM elements so markup queries still work.
 vi.mock("framer-motion", async () => {

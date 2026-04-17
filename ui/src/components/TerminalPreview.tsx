@@ -23,8 +23,8 @@ export function TerminalPreview({ sessionId, mini = false }: Props) {
   }
 
   return (
-    <div className="rounded border border-gray-700 bg-black overflow-hidden">
-      <div ref={containerRef} style={{ height: "400px" }} />
+    <div className="h-full w-full bg-black overflow-hidden">
+      <div ref={containerRef} className="h-full w-full" />
     </div>
   );
 }

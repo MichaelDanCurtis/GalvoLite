@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { Session, CreateSessionReq } from "../types";
 
-export function useSessions(pollIntervalMs = 2000) {
+export function useSessions(pollIntervalMs = 5000) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
