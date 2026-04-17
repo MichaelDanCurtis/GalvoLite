@@ -1,7 +1,5 @@
-use chrono::Utc;
 use galvolite::db::{Db, NewProject, NewSession, Project, Session, SessionState};
 use tempfile::TempDir;
-use uuid::Uuid;
 
 fn open_db() -> (TempDir, Db) {
     let tmp = TempDir::new().unwrap();
@@ -79,4 +77,42 @@ fn record_signal_and_list() {
     let signals = db.list_signals_for_session(s.id).unwrap();
     assert_eq!(signals.len(), 2);
     assert_eq!(signals[0].kind, "STATUS:WORKING");
+}
+
+#[test]
+fn list_sessions_returns_full_data_without_n_plus_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = galvolite::db::Db::open(dir.path().join("test.sqlite")).unwrap();
+
+    let proj = db.insert_project(galvolite::db::NewProject {
+        name: "test".into(),
+        path: "/tmp/test".into(),
+        remote_url: None,
+    }).unwrap();
+
+    let s1 = db.insert_session(galvolite::db::NewSession {
+        project_id: proj.id,
+        role: "implementation".into(),
+        branch: Some("feat/one".into()),
+        worktree_path: "/tmp/test".into(),
+        task_summary: "first task".into(),
+        parent_session_id: None,
+    }).unwrap();
+
+    let s2 = db.insert_session(galvolite::db::NewSession {
+        project_id: proj.id,
+        role: "brainstorm".into(),
+        branch: None,
+        worktree_path: "/tmp/test".into(),
+        task_summary: "second task".into(),
+        parent_session_id: None,
+    }).unwrap();
+
+    let sessions = db.list_sessions().unwrap();
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions[0].id, s1.id);
+    assert_eq!(sessions[0].task_summary, "first task");
+    assert_eq!(sessions[0].branch, Some("feat/one".into()));
+    assert_eq!(sessions[1].id, s2.id);
+    assert_eq!(sessions[1].role, "brainstorm");
 }
