@@ -102,8 +102,16 @@ async fn not_found_session_returns_404() {
         .await
         .unwrap();
     // `Db::get_session` returns `Error::SessionNotFound` for a missing row,
-    // which `err_to_response` maps to 404.
+    // which `err_to_response` maps to 404. Body check distinguishes
+    // handler-404 from axum's fallback-404 (empty body) — guards against
+    // route-syntax regressions.
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+    let text = std::str::from_utf8(&body).unwrap();
+    assert!(
+        text.contains("session not found"),
+        "expected handler-404 body, got: {text:?}"
+    );
 }
 
 #[tokio::test]
