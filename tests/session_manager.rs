@@ -126,3 +126,35 @@ async fn delete_project_unknown_returns_not_found() {
         Err(galvolite::error::Error::ProjectNotFound(_))
     ));
 }
+
+#[tokio::test]
+async fn set_autopilot_toggles_session_flag() {
+    let (mgr, _dir) = setup_mgr().await;
+    let project = mgr
+        .add_project(galvolite::db::NewProject {
+            name: "p".into(),
+            path: tempfile::tempdir().unwrap().path().to_string_lossy().into_owned(),
+            remote_url: None,
+        })
+        .unwrap();
+    let session = mgr
+        .spawn_session(project.id, "t".into(), "implementation".into(), "echo".into(), vec![])
+        .await
+        .unwrap();
+
+    assert!(!session.autopilot);
+    mgr.set_autopilot(session.id, true).await.unwrap();
+    assert!(mgr.get_session(session.id).unwrap().autopilot);
+    mgr.set_autopilot(session.id, false).await.unwrap();
+    assert!(!mgr.get_session(session.id).unwrap().autopilot);
+}
+
+#[tokio::test]
+async fn set_autopilot_unknown_session_returns_not_found() {
+    let (mgr, _dir) = setup_mgr().await;
+    let res = mgr.set_autopilot(uuid::Uuid::new_v4(), true).await;
+    assert!(matches!(
+        res,
+        Err(galvolite::error::Error::SessionNotFound(_))
+    ));
+}

@@ -338,6 +338,12 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Toggle the session's `autopilot` flag. State-only in Plan 2; Plan 3
+    /// wires behavior off this flag.
+    pub async fn set_autopilot(&self, id: Uuid, enabled: bool) -> Result<()> {
+        self.db.set_session_autopilot(id, enabled)
+    }
+
     /// Cascade-delete a project: kill any running sessions under this project,
     /// then purge rows via `Db::delete_project_cascade`.
     ///
