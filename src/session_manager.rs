@@ -79,13 +79,34 @@ impl SessionManager {
 
         let cycle_id = self.db.start_cycle(session.id)?;
 
-        let pty = PtyHandle::spawn(PtyOpts {
+        // PTY spawn. If this fails, session + cycle rows exist but no
+        // process — roll back the DB rows so nothing is orphaned.
+        let pty = match PtyHandle::spawn(PtyOpts {
             cwd: worktree,
             command: claude_cmd,
             args: vec![],
             env: vec![],
-        })?;
-        self.db.update_session_pid(session.id, pty.pid as i64)?;
+        }) {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = self.db.end_cycle_if_unended(cycle_id, None);
+                let _ = self
+                    .db
+                    .end_session_if_unended(session.id, SessionState::Error);
+                return Err(e);
+            }
+        };
+
+        // From this point on, the PTY child is alive. Any fallible step
+        // before the bg task owns cleanup must kill the child + roll back.
+        if let Err(e) = self.db.update_session_pid(session.id, pty.pid as i64) {
+            drop(pty);
+            let _ = self.db.end_cycle_if_unended(cycle_id, None);
+            let _ = self
+                .db
+                .end_session_if_unended(session.id, SessionState::Error);
+            return Err(e);
+        }
 
         let cycle_id_slot: CycleSlot = Arc::new(StdMutex::new(Some(cycle_id)));
         let pump = SignalPump::start(pty, self.db.clone(), session.id, cycle_id_slot.clone());
@@ -94,18 +115,22 @@ impl SessionManager {
 
         let fx = Arc::new(PtySideEffects::new(handle.clone()));
         let driver = Arc::new(RitualDriver::new(fx));
-        self.db.update_session_state(session.id, SessionState::Working)?;
+        if let Err(e) = self
+            .db
+            .update_session_state(session.id, SessionState::Working)
+        {
+            handle.kill();
+            let _ = self.db.end_cycle_if_unended(cycle_id, None);
+            let _ = self
+                .db
+                .end_session_if_unended(session.id, SessionState::Error);
+            return Err(e);
+        }
 
-        let injection = InjectionPrompt {
-            task_summary: &task,
-            session_id: &session.id.to_string(),
-            claude_md_path: &claude_md_path.to_string_lossy(),
-        };
-        handle
-            .write_str(&format!("{}\n", injection.render()))
-            .await?;
-
-        // Store in running map
+        // Insert into running map + spawn bg task BEFORE the first fallible
+        // interactive step (write_str). That way, if anything after this
+        // line fails, the bg task already owns the cleanup path OR we run
+        // an explicit rollback that mirrors it — nothing leaks.
         {
             let mut running = self.running.lock().unwrap();
             running.insert(
@@ -173,6 +198,26 @@ impl SessionManager {
             let mut running = mgr.running.lock().unwrap();
             running.remove(&session_id);
         });
+
+        // Injection is the final fallible step. Bg task is already running,
+        // so on failure we kill the child — the bg task will see the pty
+        // close and run its full cleanup (end cycle, end session).
+        let injection = InjectionPrompt {
+            task_summary: &task,
+            session_id: &session.id.to_string(),
+            claude_md_path: &claude_md_path.to_string_lossy(),
+        };
+        if let Err(e) = handle
+            .write_str(&format!("{}\n", injection.render()))
+            .await
+        {
+            handle.kill();
+            // Belt-and-braces: actively mark Error in case bg task's drain
+            // races us; conditional writes mean we're a no-op if it already
+            // landed Complete. The bg task still removes the running-map entry.
+            let _ = self.db.end_session_if_unended(session.id, SessionState::Error);
+            return Err(e);
+        }
 
         Ok(session)
     }
@@ -243,6 +288,12 @@ impl SessionManager {
             return Err(Error::SessionNotRunning(id));
         }
         Ok(())
+    }
+
+    /// Number of sessions currently tracked in the running map.
+    /// Useful for tests and diagnostics; not part of the stable API.
+    pub fn running_count(&self) -> usize {
+        self.running.lock().unwrap().len()
     }
 
     pub fn subscribe_output(&self, id: Uuid) -> Result<broadcast::Receiver<String>> {
