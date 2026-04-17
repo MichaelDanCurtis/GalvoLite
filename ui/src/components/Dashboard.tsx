@@ -2,28 +2,41 @@ import { useState } from "react";
 import { Plus, PlayCircle } from "lucide-react";
 import { useProjects } from "../hooks/useProjects";
 import { useSessions } from "../hooks/useSessions";
+import { useExpandedSession } from "../hooks/useExpandedSession";
 import { ProjectSelector } from "./ProjectSelector";
 import { SessionRow } from "./SessionRow";
-import { SessionDetail } from "./SessionDetail";
+import { ExpandedSessionView } from "./ExpandedSessionView";
 import { AddProjectModal } from "./modals/AddProjectModal";
 import { RemoveProjectModal } from "./modals/RemoveProjectModal";
 import { StartSessionModal } from "./modals/StartSessionModal";
+import { SendModal } from "./modals/SendModal";
+import { HandoffModal } from "./modals/HandoffModal";
+import { EndSessionModal } from "./modals/EndSessionModal";
 import type { Project } from "../types";
 
 export function Dashboard() {
   const { projects, createProject, removeProject } = useProjects();
-  const { sessions, refresh, createSession } = useSessions(2000);
+  const {
+    sessions,
+    refresh,
+    createSession,
+    sendText,
+    triggerHandoff,
+    killSession,
+    toggleAutopilot,
+  } = useSessions(2000);
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
-  const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [startOpen, setStartOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<Project | null>(null);
+  const { expandedId, expand, collapse } = useExpandedSession();
+  const [modal, setModal] = useState<null | "send" | "handoff" | "end">(null);
 
   const filtered = selectedProject
     ? sessions.filter((s) => s.project_id === selectedProject)
     : sessions;
 
-  const detail = filtered.find((s) => s.id === selectedSession);
+  const expanded = sessions.find((s) => s.id === expandedId) ?? null;
 
   const activeCount = filtered.filter(
     (s) => !["complete", "killed", "error"].includes(s.state)
@@ -84,19 +97,12 @@ export function Dashboard() {
               <SessionRow
                 key={s.id}
                 session={s}
-                selected={s.id === selectedSession}
-                onSelect={setSelectedSession}
+                onExpand={(sess) => expand(sess.id)}
                 onRefresh={refresh}
               />
             ))
           )}
         </div>
-
-        {detail && (
-          <div className="w-[480px] shrink-0">
-            <SessionDetail session={detail} onRefresh={refresh} />
-          </div>
-        )}
       </div>
 
       <AddProjectModal
@@ -128,6 +134,41 @@ export function Dashboard() {
           if (selectedProject === removedId) setSelectedProject(null);
         }}
       />
+
+      {expanded && (
+        <ExpandedSessionView
+          session={expanded}
+          onClose={collapse}
+          onSend={() => setModal("send")}
+          onHandoff={() => setModal("handoff")}
+          onEnd={() => setModal("end")}
+          onToggleAutopilot={(next) => toggleAutopilot(expanded.id, next)}
+        />
+      )}
+
+      {expanded && (
+        <>
+          <SendModal
+            open={modal === "send"}
+            onClose={() => setModal(null)}
+            onSubmit={(text) => sendText(expanded.id, text)}
+          />
+          <HandoffModal
+            open={modal === "handoff"}
+            onClose={() => setModal(null)}
+            onConfirm={() => triggerHandoff(expanded.id)}
+          />
+          <EndSessionModal
+            open={modal === "end"}
+            onClose={() => setModal(null)}
+            onConfirm={async () => {
+              await killSession(expanded.id);
+              collapse();
+            }}
+            role={expanded.role}
+          />
+        </>
+      )}
     </div>
   );
 }

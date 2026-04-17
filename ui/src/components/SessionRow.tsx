@@ -4,12 +4,11 @@ import { api } from "../api";
 
 interface Props {
   session: Session;
-  onSelect: (id: string) => void;
-  selected: boolean;
+  onExpand?: (s: Session) => void;
   onRefresh: () => void;
 }
 
-export function SessionRow({ session, onSelect, selected, onRefresh }: Props) {
+export function SessionRow({ session, onExpand, onRefresh }: Props) {
   const dotColor = STATE_COLORS[session.state] ?? "bg-gray-400";
 
   const handleKill = async (e: React.MouseEvent) => {
@@ -31,11 +30,10 @@ export function SessionRow({ session, onSelect, selected, onRefresh }: Props) {
   })();
 
   return (
-    <div
-      className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-gray-800 hover:bg-gray-800/50 ${
-        selected ? "bg-gray-800" : ""
-      }`}
-      onClick={() => onSelect(session.id)}
+    <button
+      type="button"
+      className="flex items-center gap-3 px-4 py-3 w-full text-left cursor-pointer border-b border-gray-800 hover:bg-gray-800/50"
+      onClick={() => onExpand?.(session)}
     >
       <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${dotColor}`} />
 
@@ -81,6 +79,6 @@ export function SessionRow({ session, onSelect, selected, onRefresh }: Props) {
           </button>
         </div>
       )}
-    </div>
+    </button>
   );
 }
