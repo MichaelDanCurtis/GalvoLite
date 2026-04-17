@@ -142,6 +142,7 @@ impl SessionManager {
 
                 if is_status_complete {
                     // End current cycle with latest handoff (if any), then start a new one.
+                    // Conditional end avoids clobbering a kill-path cycle close.
                     let prev_cycle = cycle_id_slot_bg.lock().unwrap().take();
                     if let Some(prev) = prev_cycle {
                         let handoff_path =
@@ -149,11 +150,8 @@ impl SessionManager {
                                 .ok()
                                 .flatten()
                                 .map(|p| p.to_string_lossy().into_owned());
-                        let _ = mgr.db.end_cycle(prev, handoff_path.as_deref());
+                        let _ = mgr.db.end_cycle_if_unended(prev, handoff_path.as_deref());
                     }
-                    // NOTE: SignalPump's internal cycle_id was fixed at start; signals
-                    // recorded after this point will continue to attribute to the old
-                    // cycle_id until SignalPump supports mutation. Task 6 scope.
                     if let Ok(new_cycle) = mgr.db.start_cycle(session_id) {
                         *cycle_id_slot_bg.lock().unwrap() = Some(new_cycle);
                     }
@@ -161,21 +159,17 @@ impl SessionManager {
             }
 
             // Session process exited — end current cycle, then end session.
+            // Conditional writes guarantee we never overwrite a kill-path
+            // Killed state with a Complete state (TOCTOU-free).
             let prev_cycle = cycle_id_slot_bg.lock().unwrap().take();
             if let Some(prev) = prev_cycle {
                 let handoff_path = crate::handoff::latest_handoff_for(&handoff_dir_bg, session_id)
                     .ok()
                     .flatten()
                     .map(|p| p.to_string_lossy().into_owned());
-                let _ = mgr.db.end_cycle(prev, handoff_path.as_deref());
+                let _ = mgr.db.end_cycle_if_unended(prev, handoff_path.as_deref());
             }
-            // Only mark Complete if the session hasn't already been terminated
-            // (e.g. by kill_session which sets Killed).
-            if let Ok(s) = mgr.db.get_session(session_id) {
-                if s.ended_at.is_none() {
-                    let _ = mgr.db.end_session(session_id, SessionState::Complete);
-                }
-            }
+            let _ = mgr.db.end_session_if_unended(session_id, SessionState::Complete);
             let mut running = mgr.running.lock().unwrap();
             running.remove(&session_id);
         });
@@ -232,14 +226,22 @@ impl SessionManager {
             let mut running = self.running.lock().unwrap();
             running.remove(&id)
         };
+        let was_running = rs.is_some();
         if let Some(rs) = rs {
             rs.driver.abort("killed by user").await;
             rs.handle.kill();
             if let Some(cycle) = rs.cycle_id.lock().unwrap().take() {
-                let _ = self.db.end_cycle(cycle, None);
+                let _ = self.db.end_cycle_if_unended(cycle, None);
             }
         }
-        self.db.end_session(id, SessionState::Killed)?;
+        // Conditional write: if the session already ended naturally
+        // (e.g. Complete), we must not clobber that terminal state.
+        let killed = self.db.end_session_if_unended(id, SessionState::Killed)?;
+        if !was_running && !killed {
+            // Not in the running map, and the DB says it was already ended.
+            // Report this rather than silently succeeding.
+            return Err(Error::SessionNotRunning(id));
+        }
         Ok(())
     }
 
