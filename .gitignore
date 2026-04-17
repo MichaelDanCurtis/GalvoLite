@@ -22,3 +22,7 @@ Cargo.lock.bak
 
 # Git worktrees
 .worktrees/
+
+# Frontend
+ui/node_modules/
+ui/dist/
