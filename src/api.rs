@@ -43,12 +43,18 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
 /// that needs updating when that happens.
 fn err_to_response(e: crate::error::Error) -> Response {
     use crate::error::Error;
-    let (status, msg) = match &e {
-        Error::SessionNotFound(_) => (StatusCode::NOT_FOUND, e.to_string()),
-        Error::SessionNotRunning(_) => (StatusCode::CONFLICT, e.to_string()),
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    };
-    (status, msg).into_response()
+    match &e {
+        Error::SessionNotFound(_) => (StatusCode::NOT_FOUND, e.to_string()).into_response(),
+        Error::SessionNotRunning(_) => (StatusCode::CONFLICT, e.to_string()).into_response(),
+        _ => {
+            // Opaque body for the 500 catchall — `Error::Io { path, .. }` and
+            // `Error::Db(rusqlite::Error)` can leak filesystem paths and SQL
+            // fragments. Log the full error for operators and return a fixed
+            // string to the client.
+            tracing::error!(error = ?e, "api internal error");
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
+        }
+    }
 }
 
 // --- Project endpoints ---
@@ -222,6 +228,7 @@ async fn handle_terminal_ws(
                 if socket.send(Message::Text(msg)).await.is_err() {
                     break;
                 }
+                // fall through: next recv() returns post-lag messages; must not break
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }

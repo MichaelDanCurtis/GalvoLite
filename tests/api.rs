@@ -107,6 +107,55 @@ async fn not_found_session_returns_404() {
 }
 
 #[tokio::test]
+async fn internal_error_body_is_opaque() {
+    let app = setup();
+    // Create a project, then POST the same path again. `path` has a UNIQUE
+    // constraint in the schema, so the second insert returns
+    // `rusqlite::Error` (SqliteFailure) -> `Error::Db(...)` -> the 500
+    // catchall in `err_to_response`. The body must be opaque (not the raw
+    // SQL error, which would leak "UNIQUE constraint failed: projects.path").
+    let body_json = serde_json::to_string(&serde_json::json!({
+        "name": "dup",
+        "path": "/tmp/dup-project-opaque",
+    }))
+    .unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/projects")
+                .header("content-type", "application/json")
+                .body(Body::from(body_json.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/projects")
+                .header("content-type", "application/json")
+                .body(Body::from(body_json))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+    let text = std::str::from_utf8(&body).unwrap();
+    assert_eq!(text, "internal server error");
+    // Must not leak DB/SQL internals
+    assert!(!text.to_lowercase().contains("sql"));
+    assert!(!text.to_lowercase().contains("rusqlite"));
+    assert!(!text.to_lowercase().contains("unique"));
+}
+
+#[tokio::test]
 async fn kill_nonexistent_session_returns_404_or_409() {
     let app = setup();
     let id = uuid::Uuid::new_v4();
