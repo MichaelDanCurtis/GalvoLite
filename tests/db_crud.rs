@@ -130,6 +130,56 @@ fn session_state_serializes_to_snake_case() {
 }
 
 #[test]
+fn end_session_if_unended_is_conditional() {
+    let (_tmp, db) = open_db();
+    let proj = db.insert_project(NewProject {
+        name: "p".into(), path: "/tmp/p".into(), remote_url: None,
+    }).unwrap();
+    let s = db.insert_session(NewSession {
+        project_id: proj.id, role: "implementation".into(),
+        branch: None, worktree_path: "/tmp/p".into(),
+        task_summary: "t".into(), parent_session_id: None,
+    }).unwrap();
+
+    // First call: session is unended, should update and return true.
+    let did = db.end_session_if_unended(s.id, SessionState::Complete).unwrap();
+    assert!(did);
+    let fetched = db.get_session(s.id).unwrap();
+    assert_eq!(fetched.state, SessionState::Complete);
+    assert!(fetched.ended_at.is_some());
+    let first_ended_at = fetched.ended_at.unwrap();
+
+    // Second call: already ended, should be a no-op returning false.
+    // Try to clobber with Killed — must not succeed.
+    let did_again = db.end_session_if_unended(s.id, SessionState::Killed).unwrap();
+    assert!(!did_again);
+    let fetched = db.get_session(s.id).unwrap();
+    assert_eq!(fetched.state, SessionState::Complete);
+    assert_eq!(fetched.ended_at.unwrap(), first_ended_at);
+}
+
+#[test]
+fn end_cycle_if_unended_is_conditional() {
+    let (_tmp, db) = open_db();
+    let proj = db.insert_project(NewProject {
+        name: "p".into(), path: "/tmp/p".into(), remote_url: None,
+    }).unwrap();
+    let s = db.insert_session(NewSession {
+        project_id: proj.id, role: "implementation".into(),
+        branch: None, worktree_path: "/tmp/p".into(),
+        task_summary: "t".into(), parent_session_id: None,
+    }).unwrap();
+    let cycle_id = db.start_cycle(s.id).unwrap();
+
+    let did = db.end_cycle_if_unended(cycle_id, Some("/tmp/handoff.md")).unwrap();
+    assert!(did);
+
+    // Second call with different handoff path — must not overwrite.
+    let did_again = db.end_cycle_if_unended(cycle_id, Some("/tmp/other.md")).unwrap();
+    assert!(!did_again);
+}
+
+#[test]
 fn project_serializes_to_json() {
     let p = galvolite::db::Project {
         id: uuid::Uuid::nil(),

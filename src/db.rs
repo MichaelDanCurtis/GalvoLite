@@ -419,6 +419,23 @@ impl Db {
         Ok(())
     }
 
+    /// Conditional end: only writes if the session is not already ended
+    /// (i.e. `ended_at IS NULL`). Returns `true` if a row was updated,
+    /// `false` if the session was already ended (or does not exist).
+    ///
+    /// This prevents lost-update races where a background completer and a
+    /// user-initiated kill both try to write a terminal state — whichever
+    /// writes first wins, and the other becomes a no-op.
+    pub fn end_session_if_unended(&self, id: Uuid, final_state: SessionState) -> Result<bool> {
+        let conn = self.pool.get()?;
+        let rows = conn.execute(
+            "UPDATE sessions SET state = ?1, ended_at = ?2
+             WHERE id = ?3 AND ended_at IS NULL",
+            params![final_state.to_string(), Utc::now().to_rfc3339(), id.to_string()],
+        )?;
+        Ok(rows > 0)
+    }
+
     pub fn start_cycle(&self, session_id: Uuid) -> Result<Uuid> {
         let conn = self.pool.get()?;
         let ord: i64 = conn
@@ -449,6 +466,23 @@ impl Db {
             params![Utc::now().to_rfc3339(), handoff_path, cycle_id.to_string()],
         )?;
         Ok(())
+    }
+
+    /// Conditional end: only writes if the cycle is not already ended.
+    /// Returns `true` if a row was updated, `false` if already ended
+    /// (or does not exist). See [`Db::end_session_if_unended`].
+    pub fn end_cycle_if_unended(
+        &self,
+        cycle_id: Uuid,
+        handoff_path: Option<&str>,
+    ) -> Result<bool> {
+        let conn = self.pool.get()?;
+        let rows = conn.execute(
+            "UPDATE cycles SET ended_at = ?1, handoff_path = ?2
+             WHERE id = ?3 AND ended_at IS NULL",
+            params![Utc::now().to_rfc3339(), handoff_path, cycle_id.to_string()],
+        )?;
+        Ok(rows > 0)
     }
 
     pub fn record_signal(
