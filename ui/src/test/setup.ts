@@ -8,6 +8,10 @@ vi.mock("framer-motion", async () => {
   const actual = await vi.importActual<typeof import("framer-motion")>(
     "framer-motion",
   );
+  // Cache Components per tag so React sees a stable component type across
+  // re-renders (otherwise every render unmounts/remounts the subtree, which
+  // resets controlled-input state and focus).
+  const componentCache = new Map<string, React.ComponentType<Record<string, unknown>>>();
   return {
     ...actual,
     AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
@@ -15,21 +19,25 @@ vi.mock("framer-motion", async () => {
       {},
       {
         get: (_t, tag: string) => {
-          const Component = (props: Record<string, unknown>) => {
-            // Strip motion-only props that React complains about.
-            const {
-              initial,
-              animate,
-              exit,
-              transition,
-              variants,
-              whileHover,
-              whileTap,
-              layoutId,
-              ...rest
-            } = props;
-            return React.createElement(tag, rest, (props as any).children);
-          };
+          let Component = componentCache.get(tag);
+          if (!Component) {
+            Component = (props: Record<string, unknown>) => {
+              // Strip motion-only props that React complains about.
+              const {
+                initial,
+                animate,
+                exit,
+                transition,
+                variants,
+                whileHover,
+                whileTap,
+                layoutId,
+                ...rest
+              } = props;
+              return React.createElement(tag, rest, (props as any).children);
+            };
+            componentCache.set(tag, Component);
+          }
           return Component;
         },
       },
