@@ -93,3 +93,52 @@ async fn signals_recorded_with_cycle_id() {
     assert!(!signals.is_empty());
     assert_eq!(signals[0].cycle_id, Some(cycle_id));
 }
+
+#[tokio::test]
+async fn multiple_subscribers_receive_output() {
+    use galvolite::db::{Db, NewProject, NewSession};
+    use galvolite::pty::{PtyHandle, PtyOpts, SignalPump};
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path().join("test.sqlite")).unwrap();
+
+    let proj = db.insert_project(NewProject {
+        name: "test".into(),
+        path: "/tmp/test".into(),
+        remote_url: None,
+    }).unwrap();
+
+    let sess = db.insert_session(NewSession {
+        project_id: proj.id,
+        role: "implementation".into(),
+        branch: None,
+        worktree_path: "/tmp/test".into(),
+        task_summary: "test".into(),
+        parent_session_id: None,
+    }).unwrap();
+
+    let pty = PtyHandle::spawn(PtyOpts {
+        cwd: dir.path().to_path_buf(),
+        command: "echo".into(),
+        args: vec!["hello world".into()],
+        env: vec![],
+    }).unwrap();
+
+    let pump = SignalPump::start(pty, db, sess.id, None);
+
+    let mut rx1 = pump.subscribe_output();
+    let mut rx2 = pump.subscribe_output();
+
+    let line1 = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        rx1.recv(),
+    ).await.unwrap().unwrap();
+
+    let line2 = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        rx2.recv(),
+    ).await.unwrap().unwrap();
+
+    assert!(line1.contains("hello world"));
+    assert_eq!(line1, line2);
+}

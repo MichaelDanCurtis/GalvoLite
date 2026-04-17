@@ -155,11 +155,6 @@ async fn cmd_start_session(
         let _ = db_for_sig.end_session(session_id, galvolite::db::SessionState::Complete);
     });
 
-    // NOTE: pump is moved into signal_task above, so output_task cannot use pump.next_output().
-    // For Plan 1a, session output is printed inside the signal pump's spawn task or we skip it.
-    // The signal pump already separates signals from output but we moved pump ownership.
-    // This is acceptable for Plan 1a CLI.
-
     let driver_for_ctrl = driver.clone();
     let db_for_ctrl = db.clone();
     let control_task = tokio::spawn(async move {

@@ -14,7 +14,7 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 #[derive(Debug, Clone)]
 pub struct PtyOpts {
@@ -151,13 +151,13 @@ use crate::signals::{parse_signal, Signal};
 use uuid::Uuid;
 
 /// Wraps a `PtyHandle`. Splits the stdout line stream into:
-///   * a channel of human-readable output lines (for display)
+///   * a broadcast channel of human-readable output lines (for display; multiple subscribers)
 ///   * a channel of parsed signals (for the ritual driver)
 ///
 /// Signals are persisted to the `signals` table as they arrive.
 pub struct SignalPump {
     signal_rx: mpsc::Receiver<Signal>,
-    output_rx: mpsc::Receiver<String>,
+    output_tx: broadcast::Sender<String>,
     handle: PtyHandleShared,
     _task: tokio::task::JoinHandle<()>,
 }
@@ -195,7 +195,8 @@ impl PtyHandleShared {
 impl SignalPump {
     pub fn start(mut pty: PtyHandle, db: Db, session_id: Uuid, cycle_id: Option<Uuid>) -> Self {
         let (signal_tx, signal_rx) = mpsc::channel::<Signal>(64);
-        let (output_tx, output_rx) = mpsc::channel::<String>(256);
+        let (output_tx, _) = broadcast::channel::<String>(1024);
+        let output_tx_clone = output_tx.clone();
         let shared = PtyHandleShared {
             stdin_tx: pty.stdin_tx.clone(),
             kill_flag: pty.kill_flag.clone(),
@@ -215,16 +216,14 @@ impl SignalPump {
                         break;
                     }
                 } else {
-                    // Use try_send to avoid backpressure on the signal path
-                    // when nobody is consuming output (e.g. Plan 1a CLI).
-                    let _ = output_tx.try_send(line);
+                    let _ = output_tx_clone.send(line);
                 }
             }
         });
 
         Self {
             signal_rx,
-            output_rx,
+            output_tx,
             handle: shared,
             _task: task,
         }
@@ -234,8 +233,12 @@ impl SignalPump {
         self.signal_rx.recv().await
     }
 
-    pub async fn next_output(&mut self) -> Option<String> {
-        self.output_rx.recv().await
+    pub fn subscribe_output(&self) -> broadcast::Receiver<String> {
+        self.output_tx.subscribe()
+    }
+
+    pub fn output_sender(&self) -> broadcast::Sender<String> {
+        self.output_tx.clone()
     }
 
     pub fn handle(&self) -> PtyHandleShared {
