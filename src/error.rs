@@ -38,6 +38,9 @@ pub enum Error {
 
     #[error("config: {0}")]
     Config(String),
+
+    #[error("invalid path: {0}")]
+    InvalidPath(String),
 }
 
 impl Error {

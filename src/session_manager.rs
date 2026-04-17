@@ -259,7 +259,22 @@ impl SessionManager {
         self.db.get_project(id)
     }
 
-    pub fn add_project(&self, new: crate::db::NewProject) -> Result<crate::db::Project> {
+    /// Register a project after validating + canonicalizing its path.
+    ///
+    /// Rejects:
+    /// - empty paths,
+    /// - non-absolute paths,
+    /// - paths containing any `..` component,
+    /// - paths that fail to canonicalize (don't exist / not accessible).
+    ///
+    /// The stored `path` is the canonical form, so callers (CLI, HTTP API)
+    /// all see a consistent, resolved value. This is the security boundary
+    /// for both the CLI and the HTTP API's `POST /api/projects` endpoint:
+    /// without it, an HTTP client could register projects pointing at
+    /// arbitrary paths on the host.
+    pub fn add_project(&self, mut new: crate::db::NewProject) -> Result<crate::db::Project> {
+        let canonical = validate_and_canonicalize_project_path(&new.path)?;
+        new.path = canonical;
         self.db.insert_project(new)
     }
 
@@ -330,6 +345,17 @@ impl SessionManager {
         self.running.lock().unwrap().len()
     }
 
+    /// Snapshot of currently-running session ids.
+    ///
+    /// Collects keys under the mutex, returns a `Vec` so callers can drop
+    /// the lock before doing async work per-id. This is what `serve`'s
+    /// graceful-shutdown path uses to enumerate sessions to kill —
+    /// `kill_session` re-locks the running map, so we must not hold the
+    /// lock across that call.
+    pub fn running_ids(&self) -> Vec<Uuid> {
+        self.running.lock().unwrap().keys().copied().collect()
+    }
+
     pub fn subscribe_output(&self, id: Uuid) -> Result<broadcast::Receiver<String>> {
         let running = self.running.lock().unwrap();
         let rs = running.get(&id).ok_or(Error::SessionNotRunning(id))?;
@@ -350,5 +376,128 @@ impl SessionManager {
             rs.driver.clone()
         };
         Ok(driver.state().await)
+    }
+}
+
+/// Validate and canonicalize a project path.
+///
+/// Centralized so both the CLI (`add-project`) and the HTTP API
+/// (`POST /api/projects`) apply the same rules. Returns the canonical
+/// path as a `String` (matching `NewProject::path`'s type).
+fn validate_and_canonicalize_project_path(raw: &str) -> Result<String> {
+    if raw.is_empty() {
+        return Err(Error::InvalidPath("path is empty".into()));
+    }
+    let p = std::path::Path::new(raw);
+    if !p.is_absolute() {
+        return Err(Error::InvalidPath(format!(
+            "path must be absolute: {raw}"
+        )));
+    }
+    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(Error::InvalidPath(format!(
+            "path must not contain `..` components: {raw}"
+        )));
+    }
+    let canonical = p
+        .canonicalize()
+        .map_err(|e| Error::InvalidPath(format!("resolve {raw}: {e}")))?;
+    Ok(canonical.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn open_mgr() -> (Arc<SessionManager>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Db::open(dir.path().join("test.sqlite")).unwrap();
+        let mgr = Arc::new(SessionManager::new(db, dir.path().to_path_buf()));
+        (mgr, dir)
+    }
+
+    #[test]
+    fn add_project_canonicalizes_valid_absolute_path() {
+        let (mgr, _data) = open_mgr();
+        let proj_dir = tempfile::tempdir().unwrap();
+        let raw = proj_dir.path().to_string_lossy().into_owned();
+
+        let p = mgr
+            .add_project(crate::db::NewProject {
+                name: "ok".into(),
+                path: raw.clone(),
+                remote_url: None,
+            })
+            .expect("valid absolute existing path should insert");
+
+        let expected = std::fs::canonicalize(proj_dir.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(p.path, expected);
+    }
+
+    #[test]
+    fn add_project_rejects_relative_path() {
+        let (mgr, _data) = open_mgr();
+        let err = mgr
+            .add_project(crate::db::NewProject {
+                name: "rel".into(),
+                path: "relative/path".into(),
+                remote_url: None,
+            })
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidPath(_)),
+            "expected InvalidPath, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn add_project_rejects_parent_dir_component() {
+        let (mgr, _data) = open_mgr();
+        let err = mgr
+            .add_project(crate::db::NewProject {
+                name: "dotdot".into(),
+                path: "/tmp/../etc".into(),
+                remote_url: None,
+            })
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidPath(_)),
+            "expected InvalidPath, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn add_project_rejects_nonexistent_path() {
+        let (mgr, _data) = open_mgr();
+        let err = mgr
+            .add_project(crate::db::NewProject {
+                name: "ghost".into(),
+                path: "/this/path/does/not/exist/galvolite-test".into(),
+                remote_url: None,
+            })
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidPath(_)),
+            "expected InvalidPath, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn add_project_rejects_empty_path() {
+        let (mgr, _data) = open_mgr();
+        let err = mgr
+            .add_project(crate::db::NewProject {
+                name: "empty".into(),
+                path: String::new(),
+                remote_url: None,
+            })
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidPath(_)),
+            "expected InvalidPath, got {err:?}"
+        );
     }
 }

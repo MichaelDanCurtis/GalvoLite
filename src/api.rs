@@ -34,6 +34,9 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
 ///
 /// - `SessionNotFound` → 404 (session id does not exist)
 /// - `SessionNotRunning` → 409 (session exists in DB but is not live)
+/// - `InvalidPath` → 400 (client-supplied path failed validation; the reason
+///   string is safe to echo back since it's generated from our validator,
+///   not from filesystem or SQL internals)
 /// - All other variants (including `Db` / `Io` / `Config`) → 500
 ///
 /// Note: `src/error.rs` does not have a dedicated `ProjectNotFound` variant.
@@ -46,6 +49,7 @@ fn err_to_response(e: crate::error::Error) -> Response {
     match &e {
         Error::SessionNotFound(_) => (StatusCode::NOT_FOUND, e.to_string()).into_response(),
         Error::SessionNotRunning(_) => (StatusCode::CONFLICT, e.to_string()).into_response(),
+        Error::InvalidPath(_) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
         _ => {
             // Opaque body for the 500 catchall — `Error::Io { path, .. }` and
             // `Error::Db(rusqlite::Error)` can leak filesystem paths and SQL

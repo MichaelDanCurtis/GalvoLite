@@ -41,6 +41,11 @@ async fn list_projects_empty() {
 async fn create_and_list_project() {
     let app = setup();
 
+    // SessionManager::add_project now validates + canonicalizes the path,
+    // so we must hand it a real, absolute, existing directory.
+    let proj = tempdir().unwrap();
+    let path_str = proj.path().to_string_lossy().into_owned();
+
     // Create project
     let resp = app
         .clone()
@@ -52,7 +57,7 @@ async fn create_and_list_project() {
                 .body(Body::from(
                     serde_json::to_string(&serde_json::json!({
                         "name": "TestProject",
-                        "path": "/tmp/test-project"
+                        "path": path_str,
                     }))
                     .unwrap(),
                 ))
@@ -122,9 +127,15 @@ async fn internal_error_body_is_opaque() {
     // `rusqlite::Error` (SqliteFailure) -> `Error::Db(...)` -> the 500
     // catchall in `err_to_response`. The body must be opaque (not the raw
     // SQL error, which would leak "UNIQUE constraint failed: projects.path").
+    //
+    // Path validation now requires the path to exist and canonicalize, so
+    // we use a real tempdir; both inserts canonicalize to the same string,
+    // which is precisely what trips the UNIQUE constraint we're testing.
+    let proj = tempdir().unwrap();
+    let path_str = proj.path().to_string_lossy().into_owned();
     let body_json = serde_json::to_string(&serde_json::json!({
         "name": "dup",
-        "path": "/tmp/dup-project-opaque",
+        "path": path_str,
     }))
     .unwrap();
 

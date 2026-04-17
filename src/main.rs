@@ -18,7 +18,7 @@ async fn main() -> Result<()> {
     let db = galvolite::db::Db::open(data_dir.join("galvolite.sqlite"))?;
 
     match cli.cmd {
-        Command::AddProject { path, name } => cmd_add_project(&db, path, name),
+        Command::AddProject { path, name } => cmd_add_project(&db, data_dir, path, name),
         Command::Projects => cmd_list_projects(&db),
         Command::StartSession { project, task, role, claude_cmd } => {
             cmd_start_session(&db, project, task, role, claude_cmd).await
@@ -30,6 +30,7 @@ async fn main() -> Result<()> {
         }
         Command::Handoff { session } => cmd_handoff(&db, session).await,
         Command::Kill { session } => cmd_kill(&db, session).await,
+        Command::Serve { port, host } => cmd_serve(&db, data_dir, host, port).await,
     }
 }
 
@@ -43,20 +44,30 @@ fn resolve_data_dir(override_dir: Option<std::path::PathBuf>) -> Result<std::pat
 }
 
 // Task 18 implements these two; rest are stubs for tasks 19-21.
-fn cmd_add_project(db: &galvolite::db::Db, path: std::path::PathBuf, name: Option<String>) -> Result<()> {
-    let abs = path
-        .canonicalize()
-        .map_err(|e| anyhow::anyhow!("resolve {}: {e}", path.display()))?;
+fn cmd_add_project(
+    db: &galvolite::db::Db,
+    data_dir: std::path::PathBuf,
+    path: std::path::PathBuf,
+    name: Option<String>,
+) -> Result<()> {
+    use galvolite::session_manager::SessionManager;
+    // Default the project name to the final path component (best effort —
+    // canonicalization happens inside SessionManager::add_project, which is
+    // the source of truth for path validation). If the path is unusable, we
+    // still let SessionManager reject it with a precise error.
     let name = name.unwrap_or_else(|| {
-        abs.file_name()
+        path.file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "unnamed".into())
     });
-    let p = db.insert_project(galvolite::db::NewProject {
-        name: name.clone(),
-        path: abs.to_string_lossy().into_owned(),
-        remote_url: None,
-    })?;
+    let mgr = SessionManager::new(db.clone(), data_dir);
+    let p = mgr
+        .add_project(galvolite::db::NewProject {
+            name,
+            path: path.to_string_lossy().into_owned(),
+            remote_url: None,
+        })
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     println!("Added project {} ({}) at {}", p.name, p.id, p.path);
     Ok(())
 }
@@ -276,6 +287,69 @@ async fn cmd_kill(db: &galvolite::db::Db, session_id: uuid::Uuid) -> Result<()> 
             println!("session marked killed (daemon was not running)");
         }
     }
+    Ok(())
+}
+
+/// Wait for SIGINT (Ctrl-C), or — on Unix — SIGTERM. Whichever fires first
+/// resolves the future. Used to drive `axum::serve(...).with_graceful_shutdown`.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{signal, SignalKind};
+        if let Ok(mut s) = signal(SignalKind::terminate()) {
+            s.recv().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+}
+
+async fn cmd_serve(
+    db: &galvolite::db::Db,
+    data_dir: std::path::PathBuf,
+    host: String,
+    port: u16,
+) -> Result<()> {
+    use galvolite::session_manager::SessionManager;
+    use std::sync::Arc;
+
+    let mgr = Arc::new(SessionManager::new(db.clone(), data_dir));
+    let app = galvolite::api::router(mgr.clone());
+
+    let addr = format!("{host}:{port}");
+    tracing::info!("starting API server on {addr}");
+    println!("GalvoLite API server listening on http://{addr}");
+
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .map_err(|e| anyhow::anyhow!("bind {addr}: {e}"))?;
+
+    // Graceful shutdown: on SIGINT/SIGTERM, stop accepting new connections,
+    // then iterate the running session map and kill each session so PTY
+    // children aren't orphaned. `running_ids()` snapshots keys under the
+    // mutex so we don't hold the lock across the async kill_session calls
+    // (which re-lock the same map).
+    let mgr_for_shutdown = mgr.clone();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            tracing::info!("shutdown signal received, killing running sessions");
+            for id in mgr_for_shutdown.running_ids() {
+                if let Err(e) = mgr_for_shutdown.kill_session(id).await {
+                    tracing::warn!(%id, error = ?e, "failed to kill session during shutdown");
+                }
+            }
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("serve: {e}"))?;
+
     Ok(())
 }
 

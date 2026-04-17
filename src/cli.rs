@@ -61,4 +61,13 @@ pub enum Command {
     Kill {
         session: Uuid,
     },
+    /// Start the HTTP API server (dashboard backend).
+    Serve {
+        /// Port to listen on.
+        #[arg(long, default_value = "3001")]
+        port: u16,
+        /// Host to bind to (use 0.0.0.0 for remote access).
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+    },
 }
