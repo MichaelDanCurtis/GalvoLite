@@ -193,7 +193,7 @@ impl PtyHandleShared {
 }
 
 impl SignalPump {
-    pub fn start(mut pty: PtyHandle, db: Db, session_id: Uuid) -> Self {
+    pub fn start(mut pty: PtyHandle, db: Db, session_id: Uuid, cycle_id: Option<Uuid>) -> Self {
         let (signal_tx, signal_rx) = mpsc::channel::<Signal>(64);
         let (output_tx, output_rx) = mpsc::channel::<String>(256);
         let shared = PtyHandleShared {
@@ -207,7 +207,7 @@ impl SignalPump {
                 if let Some(sig) = parse_signal(&line) {
                     let _ = db.record_signal(
                         session_id,
-                        None,
+                        cycle_id,
                         sig.kind(),
                         sig.payload().as_deref(),
                     );

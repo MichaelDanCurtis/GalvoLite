@@ -119,7 +119,8 @@ async fn cmd_start_session(
         env: vec![],
     }).map_err(|e| anyhow::anyhow!("{e}"))?;
     db.update_session_pid(session.id, pty.pid as i64)?;
-    let mut pump = SignalPump::start(pty, db.clone(), session.id);
+    let cycle_id = db.start_cycle(session.id)?;
+    let mut pump = SignalPump::start(pty, db.clone(), session.id, Some(cycle_id));
 
     let fx = Arc::new(PtySideEffects::new(pump.handle()));
     let driver = Arc::new(RitualDriver::new(fx));

@@ -64,7 +64,7 @@ async fn shared_handle_kill_terminates_child() {
     }).unwrap();
 
     let pid = pty.pid;
-    let pump = SignalPump::start(pty, db, uuid::Uuid::new_v4());
+    let pump = SignalPump::start(pty, db, uuid::Uuid::new_v4(), None);
     let handle = pump.handle();
 
     // Verify child is running
