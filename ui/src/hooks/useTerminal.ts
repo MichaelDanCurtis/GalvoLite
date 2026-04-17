@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
 import { api } from "../api";
 
 /**
@@ -40,17 +39,6 @@ export function useTerminal(
 
     container.replaceChildren();
     term.open(container);
-
-    // WebGL is optional; fall back silently if the context fails to init
-    // (headless CI / old GPUs / Tauri webview quirks).
-    try {
-      const gl = new WebglAddon();
-      gl.onContextLoss(() => gl.dispose());
-      term.loadAddon(gl);
-    } catch {
-      /* stay on DOM renderer */
-    }
-
     termRef.current = term;
 
     let ws: WebSocket | null = null;
