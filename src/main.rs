@@ -299,8 +299,16 @@ async fn shutdown_signal() {
     #[cfg(unix)]
     let terminate = async {
         use tokio::signal::unix::{signal, SignalKind};
-        if let Ok(mut s) = signal(SignalKind::terminate()) {
-            s.recv().await;
+        match signal(SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(e) => {
+                // If SIGTERM install fails, degrade to SIGINT-only rather than
+                // resolving immediately (which would insta-trigger shutdown).
+                tracing::warn!(error = ?e, "failed to install SIGTERM handler; relying on SIGINT only");
+                std::future::pending::<()>().await;
+            }
         }
     };
     #[cfg(not(unix))]
