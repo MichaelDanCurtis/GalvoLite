@@ -45,21 +45,18 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
 /// to the error variant. Per the Plan 1b Task 7 memo:
 ///
 /// - `SessionNotFound` → 404 (session id does not exist)
+/// - `ProjectNotFound` → 404 (project id does not exist; added in Plan 2)
 /// - `SessionNotRunning` → 409 (session exists in DB but is not live)
 /// - `InvalidPath` → 400 (client-supplied path failed validation; the reason
 ///   string is safe to echo back since it's generated from our validator,
 ///   not from filesystem or SQL internals)
 /// - All other variants (including `Db` / `Io` / `Config`) → 500
-///
-/// Note: `src/error.rs` does not have a dedicated `ProjectNotFound` variant.
-/// Missing projects surface as `Error::Db(rusqlite::Error::QueryReturnedNoRows)`
-/// from `Db::get_project`, which we currently map to 500. A future refactor may
-/// introduce a `NotFound` variant; the central mapping here is the one place
-/// that needs updating when that happens.
 fn err_to_response(e: crate::error::Error) -> Response {
     use crate::error::Error;
     match &e {
-        Error::SessionNotFound(_) => (StatusCode::NOT_FOUND, e.to_string()).into_response(),
+        Error::SessionNotFound(_) | Error::ProjectNotFound(_) => {
+            (StatusCode::NOT_FOUND, e.to_string()).into_response()
+        }
         Error::SessionNotRunning(_) => (StatusCode::CONFLICT, e.to_string()).into_response(),
         Error::InvalidPath(_) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
         _ => {
