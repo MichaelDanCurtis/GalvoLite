@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus } from "lucide-react";
+import { Plus, PlayCircle } from "lucide-react";
 import { useProjects } from "../hooks/useProjects";
 import { useSessions } from "../hooks/useSessions";
 import { ProjectSelector } from "./ProjectSelector";
@@ -7,14 +7,16 @@ import { SessionRow } from "./SessionRow";
 import { SessionDetail } from "./SessionDetail";
 import { AddProjectModal } from "./modals/AddProjectModal";
 import { RemoveProjectModal } from "./modals/RemoveProjectModal";
+import { StartSessionModal } from "./modals/StartSessionModal";
 import type { Project } from "../types";
 
 export function Dashboard() {
   const { projects, createProject, removeProject } = useProjects();
-  const { sessions, refresh } = useSessions(2000);
+  const { sessions, refresh, createSession } = useSessions(2000);
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [startOpen, setStartOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<Project | null>(null);
 
   const filtered = selectedProject
@@ -49,6 +51,15 @@ export function Dashboard() {
           >
             <Plus size={12} /> Add Project
           </button>
+          {selectedProject && (
+            <button
+              type="button"
+              className="flex items-center gap-1 text-xs text-neutral-300 hover:text-neutral-100 border border-neutral-700 rounded px-2 py-1"
+              onClick={() => setStartOpen(true)}
+            >
+              <PlayCircle size={12} /> Start Session
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-4 text-sm">
           <span className="text-gray-400">
@@ -93,6 +104,14 @@ export function Dashboard() {
         onClose={() => setAddOpen(false)}
         onSubmit={(req) => createProject(req)}
       />
+      {selectedProject && (
+        <StartSessionModal
+          open={startOpen}
+          onClose={() => setStartOpen(false)}
+          onSubmit={(req) => createSession(req)}
+          projectId={selectedProject}
+        />
+      )}
       <RemoveProjectModal
         open={removeTarget !== null}
         projectName={removeTarget?.name ?? ""}
