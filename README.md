@@ -6,6 +6,7 @@ Solo continuity engine for Claude Code. See `docs/superpowers/specs/2026-04-15-g
 
 - **Plan 1a** (Ritual Engine CLI): DONE — 44 tests, clippy clean
 - **Plan 1b** (Tauri Desktop Shell + Dashboard): DONE
+- **Plan 2** (Dashboard CRUD Parity): DONE — every API action reachable from the GUI
 
 ## Quick start
 
@@ -46,6 +47,14 @@ cargo run -- --data-dir /tmp/gl status <SESSION-UUID>
 ```
 
 `send`/`handoff`/`kill` work only in-process (they delegate to an in-memory `SessionManager`). For cross-process control use the HTTP API exposed by `serve`.
+
+### Plan 2 additions
+
+- Every API action is accessible from the dashboard. Add/Remove projects, Start sessions, Send text, Handoff, End session, and Autopilot toggle all live in modals reachable within two clicks. The CLI remains available as a debugging/scripting escape hatch.
+- Click any session preview on the dashboard to open a near-fullscreen focused view with a collapsible action rail (ESC or backdrop click collapses).
+- New endpoints:
+  - `DELETE /api/projects/:id` — cascade-deletes the project, its sessions, cycles, and signals. The directory on disk is not touched.
+  - `PUT /api/sessions/:id/autopilot` — toggles the `autopilot` flag on a session. State-only in Plan 2; Plan 3 wires behavior.
 
 ## Architecture
 
