@@ -19,3 +19,6 @@ Cargo.lock.bak
 .idea/
 .vscode/
 *.swp
+
+# Git worktrees
+.worktrees/
