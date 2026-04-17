@@ -167,6 +167,7 @@ pub struct SignalPump {
 pub struct PtyHandleShared {
     stdin_tx: mpsc::Sender<Vec<u8>>,
     kill_flag: Arc<AtomicBool>,
+    pid: u32,
 }
 
 impl PtyHandleShared {
@@ -183,6 +184,11 @@ impl PtyHandleShared {
 
     pub fn kill(&self) {
         self.kill_flag.store(true, Ordering::Relaxed);
+        if self.pid > 0 {
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &self.pid.to_string()])
+                .status();
+        }
     }
 }
 
@@ -193,6 +199,7 @@ impl SignalPump {
         let shared = PtyHandleShared {
             stdin_tx: pty.stdin_tx.clone(),
             kill_flag: pty.kill_flag.clone(),
+            pid: pty.pid,
         };
 
         let task = tokio::spawn(async move {
