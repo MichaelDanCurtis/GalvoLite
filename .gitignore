@@ -26,3 +26,6 @@ Cargo.lock.bak
 # Frontend
 ui/node_modules/
 ui/dist/
+
+# Tauri generated artifacts
+src-tauri/gen/

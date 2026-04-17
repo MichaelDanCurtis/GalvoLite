@@ -1,0 +1,17 @@
+[package]
+name = "galvolite-tauri"
+version = "0.1.0"
+edition = "2021"
+description = "GalvoLite desktop app — Tauri shell"
+
+[dependencies]
+galvolite = { path = ".." }
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+axum = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dirs = "5"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }

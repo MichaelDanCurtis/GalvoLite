@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "fixtures/mock-claude"]
+members = [".", "fixtures/mock-claude", "src-tauri"]
 
 [package]
 name = "galvolite"
