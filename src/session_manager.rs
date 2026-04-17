@@ -25,6 +25,10 @@ struct RunningSession {
     /// [`SignalPump`] recording task so rotation on STATUS:COMPLETE
     /// immediately re-attributes signals to the new cycle.
     cycle_id: CycleSlot,
+    /// Handoff directory for this session. Stashed so `kill_session` can
+    /// look up the latest handoff file when closing the current cycle,
+    /// mirroring the natural-exit bg task's behavior.
+    handoff_dir: HandoffDir,
 }
 
 pub struct SessionManager {
@@ -70,13 +74,28 @@ impl SessionManager {
 
         let worktree = PathBuf::from(&project.path);
         let galvolite_dir = worktree.join(".galvolite");
-        std::fs::create_dir_all(&galvolite_dir)
-            .map_err(|e| Error::io(&galvolite_dir, e))?;
+        if let Err(e) = std::fs::create_dir_all(&galvolite_dir) {
+            // Filesystem setup failed before start_cycle — only the session
+            // row exists. Close it so it doesn't linger in Spawning.
+            let _ = self
+                .db
+                .end_session_if_unended(session.id, SessionState::Error);
+            return Err(Error::io(&galvolite_dir, e));
+        }
         let claude_md_path = galvolite_dir.join("CLAUDE-session.md");
-        std::fs::write(&claude_md_path, implementation_profile())
-            .map_err(|e| Error::io(&claude_md_path, e))?;
+        if let Err(e) = std::fs::write(&claude_md_path, implementation_profile()) {
+            let _ = self
+                .db
+                .end_session_if_unended(session.id, SessionState::Error);
+            return Err(Error::io(&claude_md_path, e));
+        }
         let handoff_dir = HandoffDir::new(galvolite_dir.join("handoffs"));
-        crate::handoff::ensure_session_dir(&handoff_dir, session.id)?;
+        if let Err(e) = crate::handoff::ensure_session_dir(&handoff_dir, session.id) {
+            let _ = self
+                .db
+                .end_session_if_unended(session.id, SessionState::Error);
+            return Err(e);
+        }
 
         let cycle_id = self.db.start_cycle(session.id)?;
 
@@ -141,6 +160,7 @@ impl SessionManager {
                     handle: handle.clone(),
                     output_tx,
                     cycle_id: cycle_id_slot.clone(),
+                    handoff_dir: handoff_dir.clone(),
                 },
             );
         }
@@ -277,7 +297,19 @@ impl SessionManager {
             rs.driver.abort("killed by user").await;
             rs.handle.kill();
             if let Some(cycle) = rs.cycle_id.lock().unwrap().take() {
-                let _ = self.db.end_cycle_if_unended(cycle, None);
+                // Mirror the natural-exit bg task: attribute the latest
+                // handoff file (if any) to the cycle we're closing. A scan
+                // error here is silently treated as "no handoff" — we
+                // don't want to bubble a filesystem error out of a kill
+                // path.
+                let handoff_path =
+                    crate::handoff::latest_handoff_for(&rs.handoff_dir, id)
+                        .ok()
+                        .flatten()
+                        .map(|p| p.to_string_lossy().into_owned());
+                let _ = self
+                    .db
+                    .end_cycle_if_unended(cycle, handoff_path.as_deref());
             }
         }
         // Conditional write: if the session already ended naturally
@@ -293,6 +325,7 @@ impl SessionManager {
 
     /// Number of sessions currently tracked in the running map.
     /// Useful for tests and diagnostics; not part of the stable API.
+    #[doc(hidden)]
     pub fn running_count(&self) -> usize {
         self.running.lock().unwrap().len()
     }
