@@ -148,7 +148,13 @@ impl Drop for PtyHandle {
 
 use crate::db::Db;
 use crate::signals::{parse_signal, Signal};
+use std::sync::Mutex as StdMutex;
 use uuid::Uuid;
+
+/// Shared, mutable cycle-id slot threaded into [`SignalPump::start`].
+/// The recording task reads this on every signal so rotating the cycle
+/// (e.g. on STATUS:COMPLETE) correctly re-attributes subsequent signals.
+pub type CycleSlot = Arc<StdMutex<Option<Uuid>>>;
 
 /// Wraps a `PtyHandle`. Splits the stdout line stream into:
 ///   * a broadcast channel of human-readable output lines (for display; multiple subscribers)
@@ -193,7 +199,7 @@ impl PtyHandleShared {
 }
 
 impl SignalPump {
-    pub fn start(mut pty: PtyHandle, db: Db, session_id: Uuid, cycle_id: Option<Uuid>) -> Self {
+    pub fn start(mut pty: PtyHandle, db: Db, session_id: Uuid, cycle_id: CycleSlot) -> Self {
         let (signal_tx, signal_rx) = mpsc::channel::<Signal>(64);
         let (output_tx, _) = broadcast::channel::<String>(1024);
         let output_tx_clone = output_tx.clone();
@@ -206,9 +212,12 @@ impl SignalPump {
         let task = tokio::spawn(async move {
             while let Some(line) = pty.next_line().await {
                 if let Some(sig) = parse_signal(&line) {
+                    // Read the current cycle id on each signal so rotations
+                    // (STATUS:COMPLETE → new cycle) are reflected immediately.
+                    let cur_cycle = *cycle_id.lock().unwrap();
                     let _ = db.record_signal(
                         session_id,
-                        cycle_id,
+                        cur_cycle,
                         sig.kind(),
                         sig.payload().as_deref(),
                     );

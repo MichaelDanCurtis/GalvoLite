@@ -120,7 +120,10 @@ async fn cmd_start_session(
     }).map_err(|e| anyhow::anyhow!("{e}"))?;
     db.update_session_pid(session.id, pty.pid as i64)?;
     let cycle_id = db.start_cycle(session.id)?;
-    let mut pump = SignalPump::start(pty, db.clone(), session.id, Some(cycle_id));
+    // main.rs legacy path: no rotation, so the slot is fixed at the initial cycle_id.
+    let cycle_slot: galvolite::pty::CycleSlot =
+        std::sync::Arc::new(std::sync::Mutex::new(Some(cycle_id)));
+    let mut pump = SignalPump::start(pty, db.clone(), session.id, cycle_slot);
 
     let fx = Arc::new(PtySideEffects::new(pump.handle()));
     let driver = Arc::new(RitualDriver::new(fx));

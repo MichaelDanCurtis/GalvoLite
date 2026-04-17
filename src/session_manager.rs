@@ -8,7 +8,7 @@ use crate::claude_md::{implementation_profile, InjectionPrompt};
 use crate::db::{Db, NewSession, Session, SessionState};
 use crate::error::{Error, Result};
 use crate::handoff::HandoffDir;
-use crate::pty::{PtyHandle, PtyHandleShared, PtyOpts, SignalPump};
+use crate::pty::{CycleSlot, PtyHandle, PtyHandleShared, PtyOpts, SignalPump};
 use crate::ritual::{PtySideEffects, RitualDriver};
 use crate::signals::Signal;
 use std::collections::HashMap;
@@ -21,9 +21,10 @@ struct RunningSession {
     driver: Arc<RitualDriver>,
     handle: PtyHandleShared,
     output_tx: broadcast::Sender<String>,
-    /// Current cycle id for this running session. Updated on STATUS:COMPLETE
-    /// and consumed by kill/graceful-exit paths to mark the cycle ended.
-    cycle_id: Arc<StdMutex<Option<Uuid>>>,
+    /// Current cycle id for this running session. Shared with the
+    /// [`SignalPump`] recording task so rotation on STATUS:COMPLETE
+    /// immediately re-attributes signals to the new cycle.
+    cycle_id: CycleSlot,
 }
 
 pub struct SessionManager {
@@ -86,7 +87,8 @@ impl SessionManager {
         })?;
         self.db.update_session_pid(session.id, pty.pid as i64)?;
 
-        let pump = SignalPump::start(pty, self.db.clone(), session.id, Some(cycle_id));
+        let cycle_id_slot: CycleSlot = Arc::new(StdMutex::new(Some(cycle_id)));
+        let pump = SignalPump::start(pty, self.db.clone(), session.id, cycle_id_slot.clone());
         let handle = pump.handle();
         let output_tx = pump.output_sender();
 
@@ -102,8 +104,6 @@ impl SessionManager {
         handle
             .write_str(&format!("{}\n", injection.render()))
             .await?;
-
-        let cycle_id_slot = Arc::new(StdMutex::new(Some(cycle_id)));
 
         // Store in running map
         {

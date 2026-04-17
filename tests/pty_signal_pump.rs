@@ -26,7 +26,12 @@ async fn signals_emitted_on_dedicated_channel_and_persisted() {
         env: vec![],
     }).unwrap();
 
-    let mut pump = SignalPump::start(handle, db.clone(), sess.id, None);
+    let mut pump = SignalPump::start(
+        handle,
+        db.clone(),
+        sess.id,
+        std::sync::Arc::new(std::sync::Mutex::new(None)),
+    );
 
     // Collect 2 signals.
     let mut got = Vec::new();
@@ -79,7 +84,12 @@ async fn signals_recorded_with_cycle_id() {
         env: vec![],
     }).unwrap();
 
-    let mut pump = SignalPump::start(pty, db.clone(), sess.id, Some(cycle_id));
+    let mut pump = SignalPump::start(
+        pty,
+        db.clone(),
+        sess.id,
+        std::sync::Arc::new(std::sync::Mutex::new(Some(cycle_id))),
+    );
 
     // Wait for signal
     let sig = tokio::time::timeout(
@@ -124,7 +134,12 @@ async fn multiple_subscribers_receive_output() {
         env: vec![],
     }).unwrap();
 
-    let pump = SignalPump::start(pty, db, sess.id, None);
+    let pump = SignalPump::start(
+        pty,
+        db,
+        sess.id,
+        std::sync::Arc::new(std::sync::Mutex::new(None)),
+    );
 
     let mut rx1 = pump.subscribe_output();
     let mut rx2 = pump.subscribe_output();
