@@ -30,10 +30,17 @@ export function SessionRow({ session, onExpand, onRefresh }: Props) {
   })();
 
   return (
-    <button
-      type="button"
-      className="flex items-center gap-3 px-4 py-3 w-full text-left cursor-pointer border-b border-gray-800 hover:bg-gray-800/50"
+    <div
+      role="button"
+      tabIndex={0}
+      className="flex items-center gap-3 px-4 py-3 w-full text-left cursor-pointer border-b border-gray-800 hover:bg-gray-800/50 focus:outline-none focus:bg-gray-800/70"
       onClick={() => onExpand?.(session)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onExpand?.(session);
+        }
+      }}
     >
       <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${dotColor}`} />
 
@@ -79,6 +86,6 @@ export function SessionRow({ session, onExpand, onRefresh }: Props) {
           </button>
         </div>
       )}
-    </button>
+    </div>
   );
 }

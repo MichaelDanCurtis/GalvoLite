@@ -42,6 +42,7 @@ fn main() {
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

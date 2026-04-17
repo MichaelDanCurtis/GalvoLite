@@ -1,5 +1,14 @@
 import { useState } from "react";
+import { FolderOpen } from "lucide-react";
 import { Modal } from "./Modal";
+
+async function pickDirectory(): Promise<string | null> {
+  const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  if (!isTauri) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const result = await open({ directory: true, multiple: false });
+  return typeof result === "string" ? result : null;
+}
 
 interface Props {
   open: boolean;
@@ -46,12 +55,26 @@ export function AddProjectModal({ open, onClose, onSubmit }: Props) {
         </label>
         <label className="flex flex-col gap-1 text-xs">
           <span className="text-neutral-400">Path</span>
-          <input
-            className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-sm text-neutral-100 font-mono"
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            placeholder="/absolute/path/to/workspace"
-          />
+          <div className="flex gap-1">
+            <input
+              className="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-sm text-neutral-100 font-mono"
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+              placeholder="/absolute/path/to/workspace"
+            />
+            <button
+              type="button"
+              title="Browse…"
+              aria-label="Browse for folder"
+              className="px-2 py-1 border border-neutral-700 rounded text-neutral-300 hover:text-neutral-100 hover:border-neutral-500"
+              onClick={async () => {
+                const picked = await pickDirectory();
+                if (picked) setPath(picked);
+              }}
+            >
+              <FolderOpen size={14} />
+            </button>
+          </div>
         </label>
         {error && (
           <p className="text-xs text-red-400" role="alert">

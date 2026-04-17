@@ -28,7 +28,18 @@ export function useTerminal(
     term.loadAddon(fitAddon);
     containerRef.current.replaceChildren();
     term.open(containerRef.current);
-    fitAddon.fit();
+    // xterm's renderer initializes asynchronously; calling fit() synchronously
+    // can crash with "Cannot read properties of undefined (reading 'dimensions')".
+    const safeFit = () => {
+      requestAnimationFrame(() => {
+        try {
+          fitAddon.fit();
+        } catch {
+          /* renderer not ready yet */
+        }
+      });
+    };
+    safeFit();
     termRef.current = term;
 
     const url = api.terminalWsUrl(sessionId);
@@ -36,14 +47,14 @@ export function useTerminal(
     wsRef.current = ws;
 
     ws.onmessage = (ev) => {
-      term.writeln(ev.data);
+      term.write(ev.data);
     };
 
     ws.onclose = () => {
-      term.writeln("\r\n[connection closed]");
+      term.write("\r\n[connection closed]\r\n");
     };
 
-    const onResize = () => fitAddon.fit();
+    const onResize = safeFit;
     window.addEventListener("resize", onResize);
 
     return () => {
