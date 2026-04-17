@@ -338,6 +338,41 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Cascade-delete a project: kill any running sessions under this project,
+    /// then purge rows via `Db::delete_project_cascade`.
+    ///
+    /// Returns `Error::ProjectNotFound` if the id is unknown.
+    /// Kill errors on a per-session basis are best-effort: if a PTY is already
+    /// dead the session row is still purged. If every kill succeeds but the
+    /// cascade fails (e.g. DB closed), the kills are not rolled back.
+    pub async fn delete_project(&self, project_id: Uuid) -> Result<()> {
+        // Early 404 so we don't half-kill sessions of a nonexistent project.
+        let _ = self.db.get_project(project_id).map_err(|e| match e {
+            Error::Db(rusqlite::Error::QueryReturnedNoRows) => Error::ProjectNotFound(project_id),
+            other => other,
+        })?;
+
+        // Snapshot sessions that belong to this project and are currently running.
+        let running: Vec<Uuid> = self
+            .db
+            .list_sessions()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|s| s.project_id == project_id)
+            .map(|s| s.id)
+            .filter(|id| self.running_ids().contains(id))
+            .collect();
+
+        for id in running {
+            if let Err(e) = self.kill_session(id).await {
+                tracing::warn!(session_id = %id, error = ?e, "kill during project delete failed; continuing");
+            }
+        }
+
+        self.db.delete_project_cascade(project_id)?;
+        Ok(())
+    }
+
     /// Number of sessions currently tracked in the running map.
     /// Useful for tests and diagnostics; not part of the stable API.
     #[doc(hidden)]
