@@ -101,15 +101,13 @@ export function Dashboard() {
             ? sessions.filter((s) => s.project_id === removeTarget.id).length
             : 0
         }
-        onClose={() => {
-          if (removeTarget && selectedProject === removeTarget.id) {
-            setSelectedProject(null);
-          }
-          setRemoveTarget(null);
+        onClose={() => setRemoveTarget(null)}
+        onConfirm={async () => {
+          if (!removeTarget) return;
+          const removedId = removeTarget.id;
+          await removeProject(removedId);
+          if (selectedProject === removedId) setSelectedProject(null);
         }}
-        onConfirm={() =>
-          removeTarget ? removeProject(removeTarget.id) : Promise.resolve()
-        }
       />
     </div>
   );
