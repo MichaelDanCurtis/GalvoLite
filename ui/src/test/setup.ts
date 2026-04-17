@@ -2,6 +2,20 @@ import "@testing-library/jest-dom/vitest";
 import React from "react";
 import { vi } from "vitest";
 
+// xterm queries window.matchMedia at construction time; jsdom doesn't provide it.
+if (typeof window !== "undefined" && !window.matchMedia) {
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia;
+}
+
 // Framer Motion animations are not meaningful in jsdom.
 // Mock `motion.*` to regular DOM elements so markup queries still work.
 vi.mock("framer-motion", async () => {
