@@ -26,7 +26,12 @@ async fn signals_emitted_on_dedicated_channel_and_persisted() {
         env: vec![],
     }).unwrap();
 
-    let mut pump = SignalPump::start(handle, db.clone(), sess.id);
+    let mut pump = SignalPump::start(
+        handle,
+        db.clone(),
+        sess.id,
+        std::sync::Arc::new(std::sync::Mutex::new(None)),
+    );
 
     // Collect 2 signals.
     let mut got = Vec::new();
@@ -45,4 +50,110 @@ async fn signals_emitted_on_dedicated_channel_and_persisted() {
     let kinds: Vec<String> = rows.iter().map(|r| r.kind.clone()).collect();
     assert!(kinds.contains(&"STATUS:WORKING".to_string()));
     assert!(kinds.contains(&"HANDOFF:READY".to_string()));
+}
+
+#[tokio::test]
+async fn signals_recorded_with_cycle_id() {
+    use galvolite::db::{Db, NewProject, NewSession};
+    use galvolite::pty::{PtyHandle, PtyOpts, SignalPump};
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path().join("test.sqlite")).unwrap();
+
+    let proj = db.insert_project(NewProject {
+        name: "test".into(),
+        path: "/tmp/test".into(),
+        remote_url: None,
+    }).unwrap();
+
+    let sess = db.insert_session(NewSession {
+        project_id: proj.id,
+        role: "implementation".into(),
+        branch: None,
+        worktree_path: "/tmp/test".into(),
+        task_summary: "test".into(),
+        parent_session_id: None,
+    }).unwrap();
+
+    let cycle_id = db.start_cycle(sess.id).unwrap();
+
+    let pty = PtyHandle::spawn(PtyOpts {
+        cwd: dir.path().to_path_buf(),
+        command: "echo".into(),
+        args: vec!["[STATUS:WORKING]".into()],
+        env: vec![],
+    }).unwrap();
+
+    let mut pump = SignalPump::start(
+        pty,
+        db.clone(),
+        sess.id,
+        std::sync::Arc::new(std::sync::Mutex::new(Some(cycle_id))),
+    );
+
+    // Wait for signal
+    let sig = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        pump.next_signal(),
+    ).await.unwrap();
+    assert!(sig.is_some());
+
+    // Verify signal was recorded with cycle_id
+    let signals = db.list_signals_for_session(sess.id).unwrap();
+    assert!(!signals.is_empty());
+    assert_eq!(signals[0].cycle_id, Some(cycle_id));
+}
+
+#[tokio::test]
+async fn multiple_subscribers_receive_output() {
+    use galvolite::db::{Db, NewProject, NewSession};
+    use galvolite::pty::{PtyHandle, PtyOpts, SignalPump};
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path().join("test.sqlite")).unwrap();
+
+    let proj = db.insert_project(NewProject {
+        name: "test".into(),
+        path: "/tmp/test".into(),
+        remote_url: None,
+    }).unwrap();
+
+    let sess = db.insert_session(NewSession {
+        project_id: proj.id,
+        role: "implementation".into(),
+        branch: None,
+        worktree_path: "/tmp/test".into(),
+        task_summary: "test".into(),
+        parent_session_id: None,
+    }).unwrap();
+
+    let pty = PtyHandle::spawn(PtyOpts {
+        cwd: dir.path().to_path_buf(),
+        command: "echo".into(),
+        args: vec!["hello world".into()],
+        env: vec![],
+    }).unwrap();
+
+    let pump = SignalPump::start(
+        pty,
+        db,
+        sess.id,
+        std::sync::Arc::new(std::sync::Mutex::new(None)),
+    );
+
+    let mut rx1 = pump.subscribe_output();
+    let mut rx2 = pump.subscribe_output();
+
+    let line1 = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        rx1.recv(),
+    ).await.unwrap().unwrap();
+
+    let line2 = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        rx2.recv(),
+    ).await.unwrap().unwrap();
+
+    assert!(line1.contains("hello world"));
+    assert_eq!(line1, line2);
 }

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicedoc/tauri/v2/crates/tauri-config-schema/schema.json",
+  "productName": "GalvoLite",
+  "version": "0.1.0",
+  "identifier": "com.lucidity.galvolite",
+  "build": {
+    "frontendDist": "../ui/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "cd ui && npm run dev",
+    "beforeBuildCommand": "cd ui && npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "GalvoLite",
+        "width": 1200,
+        "height": 800
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": []
+  }
+}

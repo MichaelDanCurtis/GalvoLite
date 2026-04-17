@@ -63,7 +63,12 @@ async fn full_ritual_with_mock_claude() {
             ("GALVO_MOCK_SESSION_ID".into(), session.id.to_string()),
         ],
     }).expect("spawn");
-    let mut pump = SignalPump::start(pty, db.clone(), session.id);
+    let mut pump = SignalPump::start(
+        pty,
+        db.clone(),
+        session.id,
+        std::sync::Arc::new(std::sync::Mutex::new(None)),
+    );
     let fx = Arc::new(PtySideEffects::new(pump.handle()));
     let driver = Arc::new(RitualDriver::new(fx));
 

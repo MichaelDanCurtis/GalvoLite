@@ -92,7 +92,7 @@ fn parse_datetime(s: &str) -> rusqlite::Result<DateTime<Utc>> {
 
 // ---------- types ----------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Project {
     pub id: Uuid,
     pub name: String,
@@ -109,6 +109,7 @@ pub struct NewProject {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SessionState {
     Spawning,
     Working,
@@ -153,7 +154,7 @@ impl FromStr for SessionState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Session {
     pub id: Uuid,
     pub project_id: Uuid,
@@ -179,7 +180,7 @@ pub struct NewSession {
     pub parent_session_id: Option<Uuid>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SignalRow {
     pub id: i64,
     pub session_id: Uuid,
@@ -344,14 +345,48 @@ impl Db {
     pub fn list_sessions(&self) -> Result<Vec<Session>> {
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
-            "SELECT id FROM sessions WHERE ended_at IS NULL ORDER BY created_at ASC",
+            "SELECT id, project_id, role, branch, worktree_path, pty_pid, state,
+                    autopilot, parent_session_id, task_summary, created_at, ended_at
+             FROM sessions WHERE ended_at IS NULL ORDER BY created_at ASC",
         )?;
-        let ids = stmt
+        let rows = stmt
             .query_map([], |r| {
-                parse_uuid(&r.get::<_, String>(0)?)
+                let state_str = r.get::<_, String>(6)?;
+                let state = SessionState::from_str(&state_str).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        6,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("{e}"),
+                        )),
+                    )
+                })?;
+                let parent = match r.get::<_, Option<String>>(8)? {
+                    Some(s) => Some(parse_uuid(&s)?),
+                    None => None,
+                };
+                let ended = match r.get::<_, Option<String>>(11)? {
+                    Some(s) => Some(parse_datetime(&s)?),
+                    None => None,
+                };
+                Ok(Session {
+                    id: parse_uuid(&r.get::<_, String>(0)?)?,
+                    project_id: parse_uuid(&r.get::<_, String>(1)?)?,
+                    role: r.get(2)?,
+                    branch: r.get(3)?,
+                    worktree_path: r.get(4)?,
+                    pty_pid: r.get(5)?,
+                    state,
+                    autopilot: r.get::<_, i64>(7)? != 0,
+                    parent_session_id: parent,
+                    task_summary: r.get(9)?,
+                    created_at: parse_datetime(&r.get::<_, String>(10)?)?,
+                    ended_at: ended,
+                })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        ids.into_iter().map(|id| self.get_session(id)).collect()
+        Ok(rows)
     }
 
     pub fn update_session_state(&self, id: Uuid, state: SessionState) -> Result<()> {
@@ -384,6 +419,23 @@ impl Db {
         Ok(())
     }
 
+    /// Conditional end: only writes if the session is not already ended
+    /// (i.e. `ended_at IS NULL`). Returns `true` if a row was updated,
+    /// `false` if the session was already ended (or does not exist).
+    ///
+    /// This prevents lost-update races where a background completer and a
+    /// user-initiated kill both try to write a terminal state — whichever
+    /// writes first wins, and the other becomes a no-op.
+    pub fn end_session_if_unended(&self, id: Uuid, final_state: SessionState) -> Result<bool> {
+        let conn = self.pool.get()?;
+        let rows = conn.execute(
+            "UPDATE sessions SET state = ?1, ended_at = ?2
+             WHERE id = ?3 AND ended_at IS NULL",
+            params![final_state.to_string(), Utc::now().to_rfc3339(), id.to_string()],
+        )?;
+        Ok(rows > 0)
+    }
+
     pub fn start_cycle(&self, session_id: Uuid) -> Result<Uuid> {
         let conn = self.pool.get()?;
         let ord: i64 = conn
@@ -414,6 +466,23 @@ impl Db {
             params![Utc::now().to_rfc3339(), handoff_path, cycle_id.to_string()],
         )?;
         Ok(())
+    }
+
+    /// Conditional end: only writes if the cycle is not already ended.
+    /// Returns `true` if a row was updated, `false` if already ended
+    /// (or does not exist). See [`Db::end_session_if_unended`].
+    pub fn end_cycle_if_unended(
+        &self,
+        cycle_id: Uuid,
+        handoff_path: Option<&str>,
+    ) -> Result<bool> {
+        let conn = self.pool.get()?;
+        let rows = conn.execute(
+            "UPDATE cycles SET ended_at = ?1, handoff_path = ?2
+             WHERE id = ?3 AND ended_at IS NULL",
+            params![Utc::now().to_rfc3339(), handoff_path, cycle_id.to_string()],
+        )?;
+        Ok(rows > 0)
     }
 
     pub fn record_signal(

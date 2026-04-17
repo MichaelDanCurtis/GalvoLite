@@ -46,3 +46,43 @@ async fn write_to_pty_reaches_child() {
 
     handle.kill().await.expect("kill");
 }
+
+#[tokio::test]
+async fn shared_handle_kill_terminates_child() {
+    use galvolite::pty::{PtyHandle, PtyOpts, SignalPump};
+    use galvolite::db::Db;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path().join("test.sqlite")).unwrap();
+
+    // Spawn a process that runs forever
+    let pty = PtyHandle::spawn(PtyOpts {
+        cwd: dir.path().to_path_buf(),
+        command: "sleep".into(),
+        args: vec!["300".into()],
+        env: vec![],
+    }).unwrap();
+
+    let pid = pty.pid;
+    let pump = SignalPump::start(
+        pty,
+        db,
+        uuid::Uuid::new_v4(),
+        std::sync::Arc::new(std::sync::Mutex::new(None)),
+    );
+    let handle = pump.handle();
+
+    // Verify child is running
+    let alive = unsafe { libc::kill(pid as i32, 0) };
+    assert_eq!(alive, 0, "child should be alive before kill");
+
+    // Kill via shared handle
+    handle.kill();
+
+    // Give the OS a moment to deliver the signal
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Verify child is dead
+    let dead = unsafe { libc::kill(pid as i32, 0) };
+    assert_ne!(dead, 0, "child should be dead after kill");
+}
