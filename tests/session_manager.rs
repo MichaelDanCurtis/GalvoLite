@@ -33,6 +33,7 @@ async fn spawn_session_and_list() {
             "test task".into(),
             "implementation".into(),
             "echo".into(),
+            vec![],
         )
         .await
         .unwrap();
@@ -50,12 +51,16 @@ async fn spawn_session_and_list() {
 async fn kill_session_marks_killed() {
     let (mgr, project_id) = setup();
 
+    // Long-running child so the kill path wins the race against a natural
+    // process exit. `sleep 60` is a real argument now that spawn_session
+    // accepts args.
     let session = mgr
         .spawn_session(
             project_id,
             "test task".into(),
             "implementation".into(),
             "sleep".into(),
+            vec!["60".into()],
         )
         .await
         .unwrap();
@@ -67,4 +72,8 @@ async fn kill_session_marks_killed() {
 
     let s = mgr.get_session(session.id).unwrap();
     assert_eq!(s.state, SessionState::Killed);
+    assert!(s.ended_at.is_some());
+    // Running-map entry should be cleared (either by kill_session directly
+    // or by the bg task after the child process was terminated).
+    assert_eq!(mgr.running_count(), 0);
 }

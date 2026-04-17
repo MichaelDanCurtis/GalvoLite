@@ -56,6 +56,7 @@ impl SessionManager {
         task: String,
         role: String,
         claude_cmd: String,
+        args: Vec<String>,
     ) -> Result<Session> {
         let project = self.db.get_project(project_id)?;
         let session = self.db.insert_session(NewSession {
@@ -84,7 +85,7 @@ impl SessionManager {
         let pty = match PtyHandle::spawn(PtyOpts {
             cwd: worktree,
             command: claude_cmd,
-            args: vec![],
+            args,
             env: vec![],
         }) {
             Ok(p) => p,
