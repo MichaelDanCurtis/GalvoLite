@@ -16,7 +16,7 @@ use tower_http::cors::CorsLayer;
 type AppState = Arc<SessionManager>;
 
 pub fn router(mgr: Arc<SessionManager>) -> Router {
-    Router::new()
+    let api = Router::new()
         .route("/api/projects", get(list_projects).post(create_project))
         .route("/api/projects/:id", get(get_project))
         .route("/api/sessions", get(list_sessions).post(create_session))
@@ -26,7 +26,19 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route("/api/sessions/:id/signals", get(get_signals))
         .route("/api/sessions/:id/terminal", get(terminal_ws))
         .layer(CorsLayer::permissive())
-        .with_state(mgr)
+        .with_state(mgr);
+
+    let ui_dir = std::path::PathBuf::from(
+        std::env::var("GALVOLITE_UI_DIR").unwrap_or_else(|_| "ui/dist".to_string()),
+    );
+    if ui_dir.exists() {
+        api.fallback_service(
+            tower_http::services::ServeDir::new(&ui_dir)
+                .fallback(tower_http::services::ServeFile::new(ui_dir.join("index.html"))),
+        )
+    } else {
+        api
+    }
 }
 
 /// Map a [`crate::error::Error`] into an HTTP response with a status appropriate
