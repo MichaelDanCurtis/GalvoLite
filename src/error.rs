@@ -30,6 +30,9 @@ pub enum Error {
     #[error("session not found: {0}")]
     SessionNotFound(uuid::Uuid),
 
+    #[error("session not running: {0}")]
+    SessionNotRunning(uuid::Uuid),
+
     #[error("ritual state error: {0}")]
     Ritual(String),
 
