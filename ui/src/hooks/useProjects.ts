@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { Project } from "../types";
+import type { Project, CreateProjectReq } from "../types";
 
 export function useProjects() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -22,5 +22,16 @@ export function useProjects() {
     refresh();
   }, []);
 
-  return { projects, loading, error, refresh };
+  const createProject = async (req: CreateProjectReq): Promise<Project> => {
+    const p = await api.createProject(req);
+    refresh();
+    return p;
+  };
+
+  const removeProject = async (id: string): Promise<void> => {
+    await api.deleteProject(id);
+    refresh();
+  };
+
+  return { projects, loading, error, refresh, createProject, removeProject };
 }
