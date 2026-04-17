@@ -92,7 +92,7 @@ fn parse_datetime(s: &str) -> rusqlite::Result<DateTime<Utc>> {
 
 // ---------- types ----------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Project {
     pub id: Uuid,
     pub name: String,
@@ -109,6 +109,7 @@ pub struct NewProject {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SessionState {
     Spawning,
     Working,
@@ -153,7 +154,7 @@ impl FromStr for SessionState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Session {
     pub id: Uuid,
     pub project_id: Uuid,
@@ -179,7 +180,7 @@ pub struct NewSession {
     pub parent_session_id: Option<Uuid>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SignalRow {
     pub id: i64,
     pub session_id: Uuid,

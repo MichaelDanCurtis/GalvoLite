@@ -116,3 +116,29 @@ fn list_sessions_returns_full_data_without_n_plus_one() {
     assert_eq!(sessions[1].id, s2.id);
     assert_eq!(sessions[1].role, "brainstorm");
 }
+
+#[test]
+fn session_state_serializes_to_snake_case() {
+    let json = serde_json::to_string(&galvolite::db::SessionState::AttentionNeeded).unwrap();
+    assert_eq!(json, "\"attention_needed\"");
+
+    let json = serde_json::to_string(&galvolite::db::SessionState::HandingOff).unwrap();
+    assert_eq!(json, "\"handing_off\"");
+
+    let back: galvolite::db::SessionState = serde_json::from_str("\"working\"").unwrap();
+    assert_eq!(back, galvolite::db::SessionState::Working);
+}
+
+#[test]
+fn project_serializes_to_json() {
+    let p = galvolite::db::Project {
+        id: uuid::Uuid::nil(),
+        name: "test".into(),
+        path: "/tmp/test".into(),
+        remote_url: None,
+        created_at: chrono::Utc::now(),
+    };
+    let json = serde_json::to_value(&p).unwrap();
+    assert_eq!(json["name"], "test");
+    assert_eq!(json["path"], "/tmp/test");
+}
