@@ -255,6 +255,48 @@ impl Db {
         Ok(rows)
     }
 
+    /// Cascade-delete a project: every signal, cycle, session row and finally
+    /// the project row, inside a single transaction.
+    ///
+    /// Returns `Error::ProjectNotFound` if the id isn't present.
+    pub fn delete_project_cascade(&self, id: uuid::Uuid) -> Result<()> {
+        use rusqlite::OptionalExtension;
+        let mut conn = self.pool.get()?;
+        let tx = conn.transaction()?;
+
+        // Verify the project exists first so we can return a clean 404.
+        let exists: bool = tx
+            .query_row(
+                "SELECT 1 FROM projects WHERE id = ?1",
+                params![id.to_string()],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !exists {
+            return Err(Error::ProjectNotFound(id));
+        }
+
+        tx.execute(
+            "DELETE FROM signals WHERE session_id IN
+                (SELECT id FROM sessions WHERE project_id = ?1)",
+            params![id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM cycles WHERE session_id IN
+                (SELECT id FROM sessions WHERE project_id = ?1)",
+            params![id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM sessions WHERE project_id = ?1",
+            params![id.to_string()],
+        )?;
+        tx.execute("DELETE FROM projects WHERE id = ?1", params![id.to_string()])?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn insert_session(&self, new: NewSession) -> Result<Session> {
         let id = Uuid::new_v4();
         let now = Utc::now();
