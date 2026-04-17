@@ -3,6 +3,7 @@
 //! See `docs/superpowers/specs/2026-04-15-galvolite-design.md` for the product spec
 //! and `docs/superpowers/plans/2026-04-15-plan-1a-ritual-engine.md` for this plan.
 
+pub mod api;
 pub mod claude_md;
 pub mod cli;
 pub mod db;
