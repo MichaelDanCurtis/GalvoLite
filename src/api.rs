@@ -244,11 +244,11 @@ async fn terminal_ws(
     Path(id): Path<uuid::Uuid>,
     ws: axum::extract::WebSocketUpgrade,
 ) -> Response {
-    let (snapshot, rx) = match mgr.subscribe_output(id) {
-        Ok(pair) => pair,
+    let rx = match mgr.subscribe_output_only(id) {
+        Ok(rx) => rx,
         Err(e) => return err_to_response(e),
     };
-    ws.on_upgrade(move |socket| handle_terminal_ws(socket, snapshot, rx, mgr, id))
+    ws.on_upgrade(move |socket| handle_terminal_ws(socket, rx, mgr, id))
         .into_response()
 }
 
@@ -265,7 +265,6 @@ enum ClientFrame {
 
 async fn handle_terminal_ws(
     socket: axum::extract::ws::WebSocket,
-    snapshot: Vec<u8>,
     mut rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
     mgr: AppState,
     session_id: uuid::Uuid,
@@ -273,35 +272,47 @@ async fn handle_terminal_ws(
     use axum::extract::ws::Message;
     use futures_util::{sink::SinkExt, stream::StreamExt};
 
-    // Split so we can concurrently forward PTY output AND read client
-    // control frames (resize). Before splitting, the single socket handle
-    // could only do one at a time.
     let (mut sink, mut stream) = socket.split();
 
+    // Side channel: reader → writer, used to deliver fresh server-side
+    // screen snapshots taken AFTER each client-driven resize. We do NOT
+    // send a snapshot at WS open: the parser is sized to whatever the
+    // PREVIOUS client (or initial PTY spawn) reported, while the new
+    // xterm starts at default dims and only fires its `fit()`-driven
+    // resize after the socket is up. A snapshot taken before that resize
+    // contains absolute cursor positions that land on the wrong cells in
+    // the client's grid, so an alt-screen TUI like Claude Code renders as
+    // interleaved garbage. Defer the snapshot until the parser has been
+    // resized to match the client; re-snapshot on every subsequent resize
+    // so the client always lands on a coherent repaint.
+    let (snap_tx, mut snap_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
+
     let writer = async move {
-        // Replay scrollback first so reattaching clients see the child's
-        // current screen state instead of a blank terminal until the next
-        // PTY write. Without this, an idle TUI (e.g. Claude Code waiting
-        // at its input prompt) renders nothing until the user types.
-        if !snapshot.is_empty() && sink.send(Message::Binary(snapshot)).await.is_err() {
-            return;
-        }
         loop {
-            match rx.recv().await {
-                Ok(bytes) => {
+            tokio::select! {
+                biased;
+                snap = snap_rx.recv() => {
+                    let Some(bytes) = snap else { break };
                     if sink.send(Message::Binary(bytes)).await.is_err() {
                         break;
                     }
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_n)) => {
-                    // Drop the frame-count marker — the terminal will redraw
-                    // from the child's next write. Don't break.
+                msg = rx.recv() => {
+                    match msg {
+                        Ok(bytes) => {
+                            if sink.send(Message::Binary(bytes)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
     };
 
+    let mgr_for_reader = mgr.clone();
     let reader = async move {
         while let Some(Ok(msg)) = stream.next().await {
             match msg {
@@ -309,10 +320,16 @@ async fn handle_terminal_ws(
                     if let Ok(frame) = serde_json::from_str::<ClientFrame>(&text) {
                         match frame {
                             ClientFrame::Resize { cols, rows } => {
-                                let _ = mgr.resize_pty(session_id, cols, rows);
+                                if mgr_for_reader.resize_pty(session_id, cols, rows).is_ok() {
+                                    if let Ok(snap) = mgr_for_reader.snapshot_terminal(session_id) {
+                                        if !snap.is_empty() && snap_tx.send(snap).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                }
                             }
                             ClientFrame::Input { data } => {
-                                let _ = mgr.write_pty(session_id, data.into_bytes()).await;
+                                let _ = mgr_for_reader.write_pty(session_id, data.into_bytes()).await;
                             }
                         }
                     }

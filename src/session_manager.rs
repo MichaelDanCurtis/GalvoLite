@@ -411,6 +411,28 @@ impl SessionManager {
         Ok(rs.scrollback.snapshot_and_subscribe())
     }
 
+    /// Subscribe for future PTY bytes only (no initial snapshot). The
+    /// terminal WebSocket pairs this with [`SessionManager::snapshot_terminal`]
+    /// taken AFTER the client has reported its grid dims via a resize frame.
+    /// See `terminal_ws` for why the snapshot is deferred.
+    pub fn subscribe_output_only(
+        &self,
+        id: Uuid,
+    ) -> Result<broadcast::Receiver<Vec<u8>>> {
+        let running = self.running.lock().unwrap();
+        let rs = running.get(&id).ok_or(Error::SessionNotRunning(id))?;
+        Ok(rs.scrollback.subscribe())
+    }
+
+    /// Capture the session's current screen state as a self-contained ANSI
+    /// repaint sequence. Call after `resize_pty` so the cursor positions in
+    /// the snapshot match the client's actual grid.
+    pub fn snapshot_terminal(&self, id: Uuid) -> Result<Vec<u8>> {
+        let running = self.running.lock().unwrap();
+        let rs = running.get(&id).ok_or(Error::SessionNotRunning(id))?;
+        Ok(rs.scrollback.snapshot())
+    }
+
     /// Resize the underlying pty for a running session.
     ///
     /// Forwarded from the terminal WebSocket when the client reports a new

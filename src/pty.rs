@@ -64,8 +64,20 @@ impl Scrollback {
         (snapshot, rx)
     }
 
+    /// Subscribe for future bytes only — does NOT include scrollback.
+    /// The terminal WebSocket uses this paired with [`Scrollback::snapshot`]
+    /// taken AFTER a client-driven resize, because a snapshot taken before
+    /// the parser knows the client's grid dims paints absolute cursor
+    /// positions onto the wrong cells (alt-screen TUIs render scrambled).
     pub fn subscribe(&self) -> broadcast::Receiver<Vec<u8>> {
         self.tx.subscribe()
+    }
+
+    /// Current screen state as a self-contained ANSI repaint sequence.
+    /// Call after resizing the parser so absolute cursor positions match
+    /// the dims the client's terminal emulator is actually using.
+    pub fn snapshot(&self) -> Vec<u8> {
+        self.parser.lock().unwrap().screen().contents_formatted()
     }
 
     pub fn resize(&self, rows: u16, cols: u16) {
