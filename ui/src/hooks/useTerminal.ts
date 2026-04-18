@@ -3,23 +3,30 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { api } from "../api";
 
+interface Options {
+  readOnly?: boolean;
+}
+
 /**
  * Wires an xterm.js terminal to a GalvoLite session's PTY over the
  * `/api/sessions/:id/terminal` WebSocket.
  *
- * Contract:
- *   - Receives raw PTY bytes (Binary frames) and writes them verbatim.
- *     This preserves ANSI cursor / erase / SGR sequences.
- *   - Sends `{"type":"resize","cols":N,"rows":N}` Text frames whenever
- *     the container size changes (ResizeObserver + onopen). The backend
- *     forwards to `MasterPty::resize` so the child process sees SIGWINCH.
- *   - Reconnects silently on close (500ms backoff, capped at 5s).
+ *   - Server → client: raw PTY bytes (Binary frames), preserving ANSI.
+ *   - Client → server: `{type:"resize",cols,rows}` on container resize,
+ *                      `{type:"input",data}` on keystroke (if !readOnly).
+ *   - Reconnects with backoff on close.
  */
 export function useTerminal(
   containerRef: React.RefObject<HTMLDivElement | null>,
   sessionId: string | null,
+  opts: Options = {},
 ) {
   const termRef = useRef<Terminal | null>(null);
+  const readOnlyRef = useRef<boolean>(!!opts.readOnly);
+
+  useEffect(() => {
+    readOnlyRef.current = !!opts.readOnly;
+  }, [opts.readOnly]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -53,8 +60,6 @@ export function useTerminal(
     };
 
     const safeFit = () => {
-      // xterm's renderer initializes asynchronously; fit() before the
-      // dimensions probe is ready panics. Defer to next frame.
       requestAnimationFrame(() => {
         try {
           fit.fit();
@@ -63,6 +68,19 @@ export function useTerminal(
           /* renderer not ready yet */
         }
       });
+    };
+
+    const handleData = (data: string) => {
+      if (readOnlyRef.current) return;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: "input", data }));
+    };
+
+    term.onData(handleData);
+
+    // Internal test hooks — not exported, not part of the public API.
+    (term as unknown as { __testHooks: { fireData: (s: string) => void } }).__testHooks = {
+      fireData: handleData,
     };
 
     const connect = () => {
@@ -84,13 +102,12 @@ export function useTerminal(
       };
       ws.onclose = () => {
         if (cancelled) return;
-        // Silent reconnect with exponential backoff up to 5s.
         const delay = Math.min(500 * 2 ** reconnectAttempt, 5000);
         reconnectAttempt += 1;
         reconnectTimer = window.setTimeout(connect, delay);
       };
       ws.onerror = () => {
-        // `onclose` will fire and drive the reconnect loop.
+        /* onclose drives reconnect */
       };
     };
 
