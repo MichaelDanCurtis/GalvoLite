@@ -244,11 +244,11 @@ async fn terminal_ws(
     Path(id): Path<uuid::Uuid>,
     ws: axum::extract::WebSocketUpgrade,
 ) -> Response {
-    let rx = match mgr.subscribe_output(id) {
-        Ok(rx) => rx,
+    let (snapshot, rx) = match mgr.subscribe_output(id) {
+        Ok(pair) => pair,
         Err(e) => return err_to_response(e),
     };
-    ws.on_upgrade(move |socket| handle_terminal_ws(socket, rx, mgr, id))
+    ws.on_upgrade(move |socket| handle_terminal_ws(socket, snapshot, rx, mgr, id))
         .into_response()
 }
 
@@ -265,6 +265,7 @@ enum ClientFrame {
 
 async fn handle_terminal_ws(
     socket: axum::extract::ws::WebSocket,
+    snapshot: Vec<u8>,
     mut rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
     mgr: AppState,
     session_id: uuid::Uuid,
@@ -278,6 +279,13 @@ async fn handle_terminal_ws(
     let (mut sink, mut stream) = socket.split();
 
     let writer = async move {
+        // Replay scrollback first so reattaching clients see the child's
+        // current screen state instead of a blank terminal until the next
+        // PTY write. Without this, an idle TUI (e.g. Claude Code waiting
+        // at its input prompt) renders nothing until the user types.
+        if !snapshot.is_empty() && sink.send(Message::Binary(snapshot)).await.is_err() {
+            return;
+        }
         loop {
             match rx.recv().await {
                 Ok(bytes) => {

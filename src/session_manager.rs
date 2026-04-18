@@ -8,7 +8,7 @@ use crate::claude_md::{implementation_profile, InjectionPrompt};
 use crate::db::{Db, NewSession, Session, SessionState};
 use crate::error::{Error, Result};
 use crate::handoff::HandoffDir;
-use crate::pty::{CycleSlot, PtyHandle, PtyHandleShared, PtyOpts, SignalPump};
+use crate::pty::{CycleSlot, PtyHandle, PtyHandleShared, PtyOpts, Scrollback, SignalPump};
 use crate::ritual::{PtySideEffects, RitualDriver};
 use crate::signals::Signal;
 use std::collections::HashMap;
@@ -20,7 +20,7 @@ use uuid::Uuid;
 struct RunningSession {
     driver: Arc<RitualDriver>,
     handle: PtyHandleShared,
-    output_tx: broadcast::Sender<Vec<u8>>,
+    scrollback: Arc<Scrollback>,
     /// Current cycle id for this running session. Shared with the
     /// [`SignalPump`] recording task so rotation on STATUS:COMPLETE
     /// immediately re-attributes signals to the new cycle.
@@ -131,7 +131,7 @@ impl SessionManager {
         let cycle_id_slot: CycleSlot = Arc::new(StdMutex::new(Some(cycle_id)));
         let pump = SignalPump::start(pty, self.db.clone(), session.id, cycle_id_slot.clone());
         let handle = pump.handle();
-        let output_tx = pump.output_sender();
+        let scrollback = pump.scrollback();
 
         let fx = Arc::new(PtySideEffects::new(handle.clone()));
         let driver = Arc::new(RitualDriver::new(fx));
@@ -158,7 +158,7 @@ impl SessionManager {
                 RunningSession {
                     driver: driver.clone(),
                     handle: handle.clone(),
-                    output_tx,
+                    scrollback,
                     cycle_id: cycle_id_slot.clone(),
                     handoff_dir: handoff_dir.clone(),
                 },
@@ -397,10 +397,18 @@ impl SessionManager {
         self.running.lock().unwrap().keys().copied().collect()
     }
 
-    pub fn subscribe_output(&self, id: Uuid) -> Result<broadcast::Receiver<Vec<u8>>> {
+    /// Returns `(scrollback_snapshot, future_bytes_receiver)`. The snapshot
+    /// is the current ring-buffer contents (most recent ~256 KiB of PTY
+    /// output); the receiver streams everything after the subscribe point.
+    /// Together they let a fresh terminal client repaint to the child's
+    /// current screen state instead of starting from blank.
+    pub fn subscribe_output(
+        &self,
+        id: Uuid,
+    ) -> Result<(Vec<u8>, broadcast::Receiver<Vec<u8>>)> {
         let running = self.running.lock().unwrap();
         let rs = running.get(&id).ok_or(Error::SessionNotRunning(id))?;
-        Ok(rs.output_tx.subscribe())
+        Ok(rs.scrollback.snapshot_and_subscribe())
     }
 
     /// Resize the underlying pty for a running session.

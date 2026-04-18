@@ -11,10 +11,65 @@
 use crate::error::{Error, Result};
 use crate::signals::LineBuffer;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{broadcast, mpsc};
+
+/// Bounded ring buffer of recent PTY bytes paired with a tokio broadcast
+/// channel. The PTY reader thread calls [`Scrollback::push`]; new terminal
+/// subscribers call [`Scrollback::snapshot_and_subscribe`] to atomically
+/// grab the current scrollback AND a receiver for everything afterwards.
+///
+/// Solves the "blank terminal when reattaching" problem: a fresh
+/// `broadcast::Receiver` only sees future bytes, so reopening an expanded
+/// session view used to show nothing until the child wrote more — for an
+/// idle TUI that may be never. With replay, the new view repaints to the
+/// child's current screen state immediately.
+///
+/// Atomicity contract: `push` holds the lock across (append → broadcast),
+/// and `snapshot_and_subscribe` holds the lock across (clone → subscribe).
+/// This guarantees every byte appears in the snapshot OR the receiver,
+/// never both, never neither.
+pub struct Scrollback {
+    inner: StdMutex<VecDeque<u8>>,
+    cap: usize,
+    tx: broadcast::Sender<Vec<u8>>,
+}
+
+impl Scrollback {
+    pub fn new(cap: usize) -> Self {
+        let (tx, _) = broadcast::channel::<Vec<u8>>(1024);
+        Self {
+            inner: StdMutex::new(VecDeque::with_capacity(cap.min(64 * 1024))),
+            cap,
+            tx,
+        }
+    }
+
+    pub fn push(&self, bytes: &[u8]) {
+        let mut buf = self.inner.lock().unwrap();
+        buf.extend(bytes);
+        if buf.len() > self.cap {
+            let drop_n = buf.len() - self.cap;
+            buf.drain(0..drop_n);
+        }
+        let _ = self.tx.send(bytes.to_vec());
+    }
+
+    pub fn snapshot_and_subscribe(&self) -> (Vec<u8>, broadcast::Receiver<Vec<u8>>) {
+        let buf = self.inner.lock().unwrap();
+        let snapshot: Vec<u8> = buf.iter().copied().collect();
+        let rx = self.tx.subscribe();
+        drop(buf);
+        (snapshot, rx)
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<Vec<u8>> {
+        self.tx.subscribe()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct PtyOpts {
@@ -31,7 +86,7 @@ pub(crate) type SharedMaster = Arc<StdMutex<Box<dyn MasterPty + Send>>>;
 pub struct PtyHandle {
     pub pid: u32,
     stdout_rx: mpsc::Receiver<String>,
-    pub(crate) raw_output_tx: broadcast::Sender<Vec<u8>>,
+    pub(crate) scrollback: Arc<Scrollback>,
     pub(crate) stdin_tx: mpsc::Sender<Vec<u8>>,
     pub(crate) kill_flag: Arc<AtomicBool>,
     pub(crate) master: SharedMaster,
@@ -77,16 +132,20 @@ impl PtyHandle {
         let kill_flag = Arc::new(AtomicBool::new(false));
 
         // Reader thread. Splits a single byte stream into two consumers:
-        //   * `raw_output_tx` (broadcast): every byte verbatim, for the
-        //     terminal WebSocket — preserves ANSI/cursor sequences that
-        //     line-based reassembly would destroy.
+        //   * `scrollback` (broadcast + ring buffer): every byte verbatim,
+        //     for the terminal WebSocket — preserves ANSI/cursor sequences
+        //     that line-based reassembly would destroy. The ring buffer
+        //     lets a reattaching client see the child's current screen
+        //     state instead of a blank terminal.
         //   * `stdout_tx` (mpsc): complete lines only, for the signal
         //     parser in `SignalPump`.
         // Signals still appear in the raw byte stream; the terminal sees
         // them alongside other output, which matches PTY semantics.
         let (stdout_tx, stdout_rx) = mpsc::channel::<String>(256);
-        let (raw_output_tx, _) = broadcast::channel::<Vec<u8>>(1024);
-        let raw_tx_reader = raw_output_tx.clone();
+        // 256 KiB scrollback: comfortably covers a full TUI screen at
+        // ~220x100 cells (Claude Code) plus ANSI overhead, with margin.
+        let scrollback = Arc::new(Scrollback::new(256 * 1024));
+        let scrollback_reader = scrollback.clone();
         let kill_reader = kill_flag.clone();
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
@@ -95,9 +154,9 @@ impl PtyHandle {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        // Broadcast raw bytes first so UI rendering is not
+                        // Push to scrollback first so UI rendering is not
                         // blocked by slow line-channel consumers.
-                        let _ = raw_tx_reader.send(buf[..n].to_vec());
+                        scrollback_reader.push(&buf[..n]);
                         let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
                         let lines = line_buf.feed(&chunk);
                         for line in lines {
@@ -128,7 +187,7 @@ impl PtyHandle {
         Ok(Self {
             pid,
             stdout_rx,
-            raw_output_tx,
+            scrollback,
             stdin_tx,
             kill_flag,
             master,
@@ -141,10 +200,11 @@ impl PtyHandle {
         self.stdout_rx.recv().await
     }
 
-    /// Subscribe to the raw byte stream from the pty master.
+    /// Subscribe to the raw byte stream from the pty master, returning the
+    /// current scrollback snapshot AND a receiver for everything afterwards.
     /// Multiple subscribers are allowed; slow consumers see `Lagged`.
-    pub fn subscribe_raw_output(&self) -> broadcast::Receiver<Vec<u8>> {
-        self.raw_output_tx.subscribe()
+    pub fn snapshot_and_subscribe(&self) -> (Vec<u8>, broadcast::Receiver<Vec<u8>>) {
+        self.scrollback.snapshot_and_subscribe()
     }
 
     /// Write bytes to the child's stdin (via pty master).
@@ -202,12 +262,12 @@ pub type CycleSlot = Arc<StdMutex<Option<Uuid>>>;
 /// the pty, parses them for signals, persists signals to the db, and forwards
 /// parsed signals to the ritual driver via an mpsc channel.
 ///
-/// Terminal output is NOT re-broadcast here — the raw byte stream on
-/// `PtyHandle::raw_output_tx` is what the WebSocket serves. Signals therefore
-/// also appear verbatim in the terminal view (matching PTY semantics).
+/// Terminal output is NOT re-broadcast here — the [`Scrollback`] owned by
+/// `PtyHandle` is what the WebSocket serves. Signals therefore also appear
+/// verbatim in the terminal view (matching PTY semantics).
 pub struct SignalPump {
     signal_rx: mpsc::Receiver<Signal>,
-    raw_output_tx: broadcast::Sender<Vec<u8>>,
+    scrollback: Arc<Scrollback>,
     handle: PtyHandleShared,
     _task: tokio::task::JoinHandle<()>,
 }
@@ -259,7 +319,7 @@ impl PtyHandleShared {
 impl SignalPump {
     pub fn start(mut pty: PtyHandle, db: Db, session_id: Uuid, cycle_id: CycleSlot) -> Self {
         let (signal_tx, signal_rx) = mpsc::channel::<Signal>(64);
-        let raw_output_tx = pty.raw_output_tx.clone();
+        let scrollback = pty.scrollback.clone();
         let shared = PtyHandleShared {
             stdin_tx: pty.stdin_tx.clone(),
             kill_flag: pty.kill_flag.clone(),
@@ -291,7 +351,7 @@ impl SignalPump {
 
         Self {
             signal_rx,
-            raw_output_tx,
+            scrollback,
             handle: shared,
             _task: task,
         }
@@ -301,15 +361,65 @@ impl SignalPump {
         self.signal_rx.recv().await
     }
 
+    /// Subscribe for future bytes only. Used by tests and callers that
+    /// don't need scrollback replay.
     pub fn subscribe_output(&self) -> broadcast::Receiver<Vec<u8>> {
-        self.raw_output_tx.subscribe()
+        self.scrollback.subscribe()
     }
 
-    pub fn output_sender(&self) -> broadcast::Sender<Vec<u8>> {
-        self.raw_output_tx.clone()
+    /// The session-local scrollback handle. Callers use this to atomically
+    /// snapshot the current screen state and subscribe for future bytes.
+    pub fn scrollback(&self) -> Arc<Scrollback> {
+        self.scrollback.clone()
     }
 
     pub fn handle(&self) -> PtyHandleShared {
         self.handle.clone()
+    }
+}
+
+#[cfg(test)]
+mod scrollback_tests {
+    use super::Scrollback;
+
+    #[test]
+    fn snapshot_replays_bytes_pushed_before_subscribe() {
+        let sb = Scrollback::new(1024);
+        sb.push(b"hello ");
+        sb.push(b"world");
+        let (snap, _rx) = sb.snapshot_and_subscribe();
+        assert_eq!(snap, b"hello world");
+    }
+
+    #[test]
+    fn evicts_oldest_bytes_when_over_cap() {
+        let sb = Scrollback::new(4);
+        sb.push(b"abc");
+        sb.push(b"defg"); // total 7, cap 4 → keep last 4: "defg"
+        let (snap, _rx) = sb.snapshot_and_subscribe();
+        assert_eq!(snap, b"defg");
+    }
+
+    #[tokio::test]
+    async fn subscribe_receives_future_pushes_after_snapshot() {
+        let sb = Scrollback::new(1024);
+        let (snap, mut rx) = sb.snapshot_and_subscribe();
+        assert!(snap.is_empty());
+        sb.push(b"future");
+        let bytes = rx.recv().await.unwrap();
+        assert_eq!(bytes, b"future");
+    }
+
+    #[tokio::test]
+    async fn subscribe_does_not_double_deliver_pre_snapshot_bytes() {
+        let sb = Scrollback::new(1024);
+        sb.push(b"old");
+        let (snap, mut rx) = sb.snapshot_and_subscribe();
+        assert_eq!(snap, b"old");
+        // Receiver must not also yield "old" — it was subscribed AFTER the
+        // broadcast happened. Polling immediately should see no message.
+        let res =
+            tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await;
+        assert!(res.is_err(), "receiver yielded a stale message: {res:?}");
     }
 }
