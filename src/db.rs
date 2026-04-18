@@ -466,6 +466,22 @@ impl Db {
         Ok(())
     }
 
+    /// Replace the `role` column on a session row. Used by SignalPump when
+    /// it observes a `[ROLE:SET role="..."]` signal so the UI can reflect
+    /// mid-session role transitions.
+    /// Returns `Error::SessionNotFound` if no row was updated.
+    pub fn set_session_role(&self, id: Uuid, role: &str) -> Result<()> {
+        let conn = self.pool.get()?;
+        let rows = conn.execute(
+            "UPDATE sessions SET role = ?1 WHERE id = ?2",
+            params![role, id.to_string()],
+        )?;
+        if rows == 0 {
+            return Err(Error::SessionNotFound(id));
+        }
+        Ok(())
+    }
+
     pub fn end_session(&self, id: Uuid, final_state: SessionState) -> Result<()> {
         let conn = self.pool.get()?;
         conn.execute(
