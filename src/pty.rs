@@ -279,6 +279,9 @@ impl SignalPump {
                         sig.kind(),
                         sig.payload().as_deref(),
                     );
+                    if let Signal::RoleSet { role } = &sig {
+                        let _ = db.set_session_role(session_id, role);
+                    }
                     if signal_tx.send(sig).await.is_err() {
                         break;
                     }
