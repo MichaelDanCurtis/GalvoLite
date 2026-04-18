@@ -11,63 +11,65 @@
 use crate::error::{Error, Result};
 use crate::signals::LineBuffer;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
-use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{broadcast, mpsc};
 
-/// Bounded ring buffer of recent PTY bytes paired with a tokio broadcast
-/// channel. The PTY reader thread calls [`Scrollback::push`]; new terminal
+/// Server-side terminal screen model paired with a tokio broadcast channel
+/// of raw PTY bytes. The PTY reader thread calls [`Scrollback::push`]; new
 /// subscribers call [`Scrollback::snapshot_and_subscribe`] to atomically
-/// grab the current scrollback AND a receiver for everything afterwards.
+/// grab a full repaint of the current screen state AND a receiver for
+/// every byte afterwards.
 ///
-/// Solves the "blank terminal when reattaching" problem: a fresh
-/// `broadcast::Receiver` only sees future bytes, so reopening an expanded
-/// session view used to show nothing until the child wrote more — for an
-/// idle TUI that may be never. With replay, the new view repaints to the
-/// child's current screen state immediately.
+/// Why a screen emulator instead of a raw byte ring: alt-screen TUIs
+/// (claude, vim, htop, less) emit incremental updates that assume a prior
+/// frame is already painted. Replaying raw bytes recreates alt-screen
+/// enter/exit sequences and partial cursor moves out of context, leaving
+/// the terminal showing fragments. A `vt100::Parser` fed the same bytes
+/// maintains the cell grid; on reattach we ask it for a freshly-formatted
+/// repaint of the *current* screen, which is what tmux attach does.
 ///
-/// Atomicity contract: `push` holds the lock across (append → broadcast),
-/// and `snapshot_and_subscribe` holds the lock across (clone → subscribe).
-/// This guarantees every byte appears in the snapshot OR the receiver,
-/// never both, never neither.
+/// Atomicity contract: `push` holds the lock across (parse → broadcast),
+/// and `snapshot_and_subscribe` holds the lock across (format → subscribe).
+/// This guarantees every byte either appears in the formatted snapshot OR
+/// arrives via the receiver, never both, never neither.
 pub struct Scrollback {
-    inner: StdMutex<VecDeque<u8>>,
-    cap: usize,
+    parser: StdMutex<vt100::Parser>,
     tx: broadcast::Sender<Vec<u8>>,
 }
 
 impl Scrollback {
-    pub fn new(cap: usize) -> Self {
+    pub fn new(rows: u16, cols: u16) -> Self {
         let (tx, _) = broadcast::channel::<Vec<u8>>(1024);
         Self {
-            inner: StdMutex::new(VecDeque::with_capacity(cap.min(64 * 1024))),
-            cap,
+            // scrollback_len=0: TUIs manage their own history; we only
+            // care about reproducing the visible screen on reattach.
+            parser: StdMutex::new(vt100::Parser::new(rows, cols, 0)),
             tx,
         }
     }
 
     pub fn push(&self, bytes: &[u8]) {
-        let mut buf = self.inner.lock().unwrap();
-        buf.extend(bytes);
-        if buf.len() > self.cap {
-            let drop_n = buf.len() - self.cap;
-            buf.drain(0..drop_n);
-        }
+        let mut p = self.parser.lock().unwrap();
+        p.process(bytes);
         let _ = self.tx.send(bytes.to_vec());
     }
 
     pub fn snapshot_and_subscribe(&self) -> (Vec<u8>, broadcast::Receiver<Vec<u8>>) {
-        let buf = self.inner.lock().unwrap();
-        let snapshot: Vec<u8> = buf.iter().copied().collect();
+        let p = self.parser.lock().unwrap();
+        let snapshot = p.screen().contents_formatted();
         let rx = self.tx.subscribe();
-        drop(buf);
+        drop(p);
         (snapshot, rx)
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Vec<u8>> {
         self.tx.subscribe()
+    }
+
+    pub fn resize(&self, rows: u16, cols: u16) {
+        self.parser.lock().unwrap().screen_mut().set_size(rows, cols);
     }
 }
 
@@ -95,11 +97,13 @@ pub struct PtyHandle {
 
 impl PtyHandle {
     pub fn spawn(opts: PtyOpts) -> Result<Self> {
+        const INIT_ROWS: u16 = 40;
+        const INIT_COLS: u16 = 120;
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
-                rows: 40,
-                cols: 120,
+                rows: INIT_ROWS,
+                cols: INIT_COLS,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -142,9 +146,7 @@ impl PtyHandle {
         // Signals still appear in the raw byte stream; the terminal sees
         // them alongside other output, which matches PTY semantics.
         let (stdout_tx, stdout_rx) = mpsc::channel::<String>(256);
-        // 256 KiB scrollback: comfortably covers a full TUI screen at
-        // ~220x100 cells (Claude Code) plus ANSI overhead, with margin.
-        let scrollback = Arc::new(Scrollback::new(256 * 1024));
+        let scrollback = Arc::new(Scrollback::new(INIT_ROWS, INIT_COLS));
         let scrollback_reader = scrollback.clone();
         let kill_reader = kill_flag.clone();
         std::thread::spawn(move || {
@@ -220,7 +222,8 @@ impl PtyHandle {
     }
 
     /// Resize the pty. Forwarded to the OS so the child process receives
-    /// SIGWINCH and can redraw at the new dimensions.
+    /// SIGWINCH and can redraw at the new dimensions; also resizes the
+    /// internal vt100 parser so a subsequent reattach snapshot matches.
     pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
         self.master
             .lock()
@@ -231,7 +234,9 @@ impl PtyHandle {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| Error::Pty(format!("resize: {e}")))
+            .map_err(|e| Error::Pty(format!("resize: {e}")))?;
+        self.scrollback.resize(rows, cols);
+        Ok(())
     }
 
     pub async fn kill(&mut self) -> Result<()> {
@@ -279,6 +284,7 @@ pub struct PtyHandleShared {
     kill_flag: Arc<AtomicBool>,
     pid: u32,
     master: SharedMaster,
+    scrollback: Arc<Scrollback>,
 }
 
 impl PtyHandleShared {
@@ -312,7 +318,9 @@ impl PtyHandleShared {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| Error::Pty(format!("resize: {e}")))
+            .map_err(|e| Error::Pty(format!("resize: {e}")))?;
+        self.scrollback.resize(rows, cols);
+        Ok(())
     }
 }
 
@@ -325,6 +333,7 @@ impl SignalPump {
             kill_flag: pty.kill_flag.clone(),
             pid: pty.pid,
             master: pty.master.clone(),
+            scrollback: scrollback.clone(),
         };
 
         let task = tokio::spawn(async move {
@@ -382,29 +391,50 @@ impl SignalPump {
 mod scrollback_tests {
     use super::Scrollback;
 
-    #[test]
-    fn snapshot_replays_bytes_pushed_before_subscribe() {
-        let sb = Scrollback::new(1024);
-        sb.push(b"hello ");
-        sb.push(b"world");
-        let (snap, _rx) = sb.snapshot_and_subscribe();
-        assert_eq!(snap, b"hello world");
+    /// Render the formatted snapshot through a fresh parser to get the
+    /// visible cell text, so tests can assert on what a reattaching client
+    /// would actually see (not raw ANSI bytes).
+    fn rendered(snap: &[u8], rows: u16, cols: u16) -> String {
+        let mut p = vt100::Parser::new(rows, cols, 0);
+        p.process(snap);
+        p.screen().contents()
     }
 
     #[test]
-    fn evicts_oldest_bytes_when_over_cap() {
-        let sb = Scrollback::new(4);
-        sb.push(b"abc");
-        sb.push(b"defg"); // total 7, cap 4 → keep last 4: "defg"
+    fn snapshot_repaints_visible_text() {
+        let sb = Scrollback::new(24, 80);
+        sb.push(b"hello ");
+        sb.push(b"world");
         let (snap, _rx) = sb.snapshot_and_subscribe();
-        assert_eq!(snap, b"defg");
+        assert!(
+            rendered(&snap, 24, 80).contains("hello world"),
+            "expected snapshot to repaint 'hello world'"
+        );
+    }
+
+    #[test]
+    fn snapshot_reflects_alt_screen_state_not_byte_history() {
+        // Enter alt-screen, draw "FRAME_A", clear and draw "FRAME_B".
+        // A raw byte ring would replay both frames; a screen emulator
+        // only repaints the current visible state ("FRAME_B").
+        let sb = Scrollback::new(24, 80);
+        sb.push(b"\x1b[?1049h"); // alt-screen enter
+        sb.push(b"FRAME_A");
+        sb.push(b"\x1b[2J\x1b[H"); // clear + home
+        sb.push(b"FRAME_B");
+        let (snap, _rx) = sb.snapshot_and_subscribe();
+        let text = rendered(&snap, 24, 80);
+        assert!(text.contains("FRAME_B"), "snapshot must contain FRAME_B");
+        assert!(
+            !text.contains("FRAME_A"),
+            "snapshot must NOT contain superseded FRAME_A; got: {text:?}"
+        );
     }
 
     #[tokio::test]
     async fn subscribe_receives_future_pushes_after_snapshot() {
-        let sb = Scrollback::new(1024);
-        let (snap, mut rx) = sb.snapshot_and_subscribe();
-        assert!(snap.is_empty());
+        let sb = Scrollback::new(24, 80);
+        let (_snap, mut rx) = sb.snapshot_and_subscribe();
         sb.push(b"future");
         let bytes = rx.recv().await.unwrap();
         assert_eq!(bytes, b"future");
@@ -412,11 +442,10 @@ mod scrollback_tests {
 
     #[tokio::test]
     async fn subscribe_does_not_double_deliver_pre_snapshot_bytes() {
-        let sb = Scrollback::new(1024);
+        let sb = Scrollback::new(24, 80);
         sb.push(b"old");
-        let (snap, mut rx) = sb.snapshot_and_subscribe();
-        assert_eq!(snap, b"old");
-        // Receiver must not also yield "old" — it was subscribed AFTER the
+        let (_snap, mut rx) = sb.snapshot_and_subscribe();
+        // Receiver must not yield "old" — it was subscribed AFTER the
         // broadcast happened. Polling immediately should see no message.
         let res =
             tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await;
