@@ -11,7 +11,6 @@ interface Props {
 
 export function StartSessionModal({ open, onClose, onSubmit, projectId }: Props) {
   const [task, setTask] = useState("");
-  const [role, setRole] = useState("implementation");
   const [cmd, setCmd] = useState("claude");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,7 +26,6 @@ export function StartSessionModal({ open, onClose, onSubmit, projectId }: Props)
       await onSubmit({
         project_id: projectId,
         task: task.trim(),
-        role: role.trim(),
         claude_cmd: cmd.trim(),
       });
       setTask("");
@@ -50,14 +48,6 @@ export function StartSessionModal({ open, onClose, onSubmit, projectId }: Props)
             onChange={(e) => setTask(e.target.value)}
             autoFocus
             placeholder="Short description of what this session should do"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs">
-          <span className="text-neutral-400">Role</span>
-          <input
-            className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-sm text-neutral-100"
-            value={role}
-            onChange={(e) => setRole(e.target.value)}
           />
         </label>
         <label className="flex flex-col gap-1 text-xs">

@@ -1,10 +1,10 @@
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { StartSessionModal } from "./StartSessionModal";
 
 describe("StartSessionModal", () => {
-  it("submits task + role + command", async () => {
+  it("submits task + claude command without a role field", async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(
       <StartSessionModal
@@ -14,32 +14,28 @@ describe("StartSessionModal", () => {
         projectId="proj-1"
       />,
     );
-    await userEvent.type(screen.getByLabelText(/task/i), "refactor api");
-    const roleInput = screen.getByLabelText(/role/i);
-    await userEvent.clear(roleInput);
-    await userEvent.type(roleInput, "scout");
-    const cmdInput = screen.getByLabelText(/command/i);
-    await userEvent.clear(cmdInput);
-    await userEvent.type(cmdInput, "claude");
-    await userEvent.click(screen.getByRole("button", { name: /start/i }));
-
+    await userEvent.type(screen.getByLabelText(/task/i), "do thing");
+    await userEvent.click(screen.getByRole("button", { name: /^start$/i }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit).toHaveBeenCalledWith({
       project_id: "proj-1",
-      task: "refactor api",
-      role: "scout",
+      task: "do thing",
       claude_cmd: "claude",
     });
   });
 
-  it("disables start with empty task", () => {
+  it("disables Start until task is non-empty", async () => {
     render(
       <StartSessionModal
         open
         onClose={() => {}}
         onSubmit={vi.fn()}
-        projectId="p"
+        projectId="proj-1"
       />,
     );
-    expect(screen.getByRole("button", { name: /start/i })).toBeDisabled();
+    const start = screen.getByRole("button", { name: /^start$/i });
+    expect(start).toBeDisabled();
+    await userEvent.type(screen.getByLabelText(/task/i), "x");
+    expect(start).toBeEnabled();
   });
 });
