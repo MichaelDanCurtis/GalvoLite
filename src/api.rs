@@ -376,8 +376,8 @@ async fn list_directory(
     let canonical = match p.canonicalize() {
         Ok(c) => c,
         Err(e) => {
-            return (StatusCode::BAD_REQUEST, format!("path not accessible: {e}"))
-                .into_response()
+            tracing::warn!("fs_list canonicalize {:?}: {}", p, e);
+            return (StatusCode::BAD_REQUEST, "path not accessible").into_response();
         }
     };
     if !canonical.is_dir() {
@@ -397,8 +397,8 @@ async fn list_directory(
             })
             .collect(),
         Err(e) => {
-            return (StatusCode::BAD_REQUEST, format!("read_dir failed: {e}"))
-                .into_response()
+            tracing::warn!("fs_list read_dir {:?}: {}", canonical, e);
+            return (StatusCode::BAD_REQUEST, "path not accessible").into_response();
         }
     };
     // Dirs first, then files; case-insensitive name within each group.
