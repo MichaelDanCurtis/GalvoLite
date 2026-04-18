@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { CanvasAddon } from "@xterm/addon-canvas";
 import { api } from "../api";
 
 interface Options {
@@ -32,99 +33,124 @@ export function useTerminal(
     const container = containerRef.current;
     if (!container || !sessionId) return;
 
-    const term = new Terminal({
-      fontSize: 13,
-      fontFamily:
-        '"JetBrains Mono","Menlo","SF Mono",ui-monospace,monospace',
-      theme: { background: "#0a0a0a", foreground: "#e5e5e5" },
-      scrollback: 10_000,
-      allowProposedApi: true,
-      convertEol: false,
-    });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
+    let disposed = false;
+    let teardown: (() => void) | null = null;
 
-    container.replaceChildren();
-    term.open(container);
-    termRef.current = term;
+    // xterm measures cell metrics from whatever font is loaded at construction
+    // time. Await the webfont so JetBrains Mono glyphs render into a JBM-sized
+    // cell, not a Menlo-sized one — otherwise Unicode block chars and pixel-art
+    // look squished.
+    void (async () => {
+      try {
+        await Promise.all([
+          document.fonts.load('13px "JetBrains Mono"'),
+          document.fonts.load('bold 13px "JetBrains Mono"'),
+        ]);
+      } catch {
+        /* fall back to whatever is currently loaded */
+      }
+      if (disposed) return;
 
-    let ws: WebSocket | null = null;
-    let cancelled = false;
-    let reconnectAttempt = 0;
-    let reconnectTimer: number | null = null;
-
-    const sendResize = () => {
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      const { cols, rows } = term;
-      ws.send(JSON.stringify({ type: "resize", cols, rows }));
-    };
-
-    const safeFit = () => {
-      requestAnimationFrame(() => {
-        try {
-          fit.fit();
-          sendResize();
-        } catch {
-          /* renderer not ready yet */
-        }
+      const term = new Terminal({
+        fontSize: 13,
+        fontFamily:
+          '"JetBrains Mono","Menlo","SF Mono",ui-monospace,monospace',
+        theme: { background: "#0a0a0a", foreground: "#e5e5e5" },
+        scrollback: 10_000,
+        allowProposedApi: true,
+        convertEol: false,
       });
-    };
+      const fit = new FitAddon();
+      term.loadAddon(fit);
 
-    const handleData = (data: string) => {
-      if (readOnlyRef.current) return;
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify({ type: "input", data }));
-    };
+      container.replaceChildren();
+      term.open(container);
+      try { term.loadAddon(new CanvasAddon()); } catch { /* fall back to DOM renderer */ }
+      termRef.current = term;
 
-    term.onData(handleData);
+      let ws: WebSocket | null = null;
+      let cancelled = false;
+      let reconnectAttempt = 0;
+      let reconnectTimer: number | null = null;
 
-    // Internal test hooks — not exported, not part of the public API.
-    (term as unknown as { __testHooks: { fireData: (s: string) => void } }).__testHooks = {
-      fireData: handleData,
-    };
-
-    const connect = () => {
-      if (cancelled) return;
-      const url = api.terminalWsUrl(sessionId);
-      ws = new WebSocket(url);
-      ws.binaryType = "arraybuffer";
-
-      ws.onopen = () => {
-        reconnectAttempt = 0;
-        safeFit();
+      const sendResize = () => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const { cols, rows } = term;
+        ws.send(JSON.stringify({ type: "resize", cols, rows }));
       };
-      ws.onmessage = (ev) => {
-        if (ev.data instanceof ArrayBuffer) {
-          term.write(new Uint8Array(ev.data));
-        } else if (typeof ev.data === "string") {
-          term.write(ev.data);
-        }
+
+      const safeFit = () => {
+        requestAnimationFrame(() => {
+          try {
+            fit.fit();
+            sendResize();
+          } catch {
+            /* renderer not ready yet */
+          }
+        });
       };
-      ws.onclose = () => {
+
+      const handleData = (data: string) => {
+        if (readOnlyRef.current) return;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ type: "input", data }));
+      };
+
+      term.onData(handleData);
+
+      // Internal test hooks — not exported, not part of the public API.
+      (term as unknown as { __testHooks: { fireData: (s: string) => void } }).__testHooks = {
+        fireData: handleData,
+      };
+
+      const connect = () => {
         if (cancelled) return;
-        const delay = Math.min(500 * 2 ** reconnectAttempt, 5000);
-        reconnectAttempt += 1;
-        reconnectTimer = window.setTimeout(connect, delay);
-      };
-      ws.onerror = () => {
-        /* onclose drives reconnect */
-      };
-    };
+        const url = api.terminalWsUrl(sessionId);
+        ws = new WebSocket(url);
+        ws.binaryType = "arraybuffer";
 
-    connect();
+        ws.onopen = () => {
+          reconnectAttempt = 0;
+          safeFit();
+        };
+        ws.onmessage = (ev) => {
+          if (ev.data instanceof ArrayBuffer) {
+            term.write(new Uint8Array(ev.data));
+          } else if (typeof ev.data === "string") {
+            term.write(ev.data);
+          }
+        };
+        ws.onclose = () => {
+          if (cancelled) return;
+          const delay = Math.min(500 * 2 ** reconnectAttempt, 5000);
+          reconnectAttempt += 1;
+          reconnectTimer = window.setTimeout(connect, delay);
+        };
+        ws.onerror = () => {
+          /* onclose drives reconnect */
+        };
+      };
 
-    const ro = new ResizeObserver(() => safeFit());
-    ro.observe(container);
-    window.addEventListener("resize", safeFit);
+      connect();
+
+      const ro = new ResizeObserver(() => safeFit());
+      ro.observe(container);
+      window.addEventListener("resize", safeFit);
+
+      teardown = () => {
+        cancelled = true;
+        if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+        ro.disconnect();
+        window.removeEventListener("resize", safeFit);
+        if (ws && ws.readyState <= WebSocket.OPEN) ws.close();
+        term.dispose();
+        termRef.current = null;
+      };
+    })();
 
     return () => {
-      cancelled = true;
-      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
-      ro.disconnect();
-      window.removeEventListener("resize", safeFit);
-      if (ws && ws.readyState <= WebSocket.OPEN) ws.close();
-      term.dispose();
-      termRef.current = null;
+      disposed = true;
+      teardown?.();
     };
   }, [containerRef, sessionId]);
 
