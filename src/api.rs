@@ -260,6 +260,7 @@ async fn terminal_ws(
 #[serde(tag = "type", rename_all = "lowercase")]
 enum ClientFrame {
     Resize { cols: u16, rows: u16 },
+    Input { data: String },
 }
 
 async fn handle_terminal_ws(
@@ -301,6 +302,9 @@ async fn handle_terminal_ws(
                         match frame {
                             ClientFrame::Resize { cols, rows } => {
                                 let _ = mgr.resize_pty(session_id, cols, rows);
+                            }
+                            ClientFrame::Input { data } => {
+                                let _ = mgr.write_pty(session_id, data.into_bytes()).await;
                             }
                         }
                     }
