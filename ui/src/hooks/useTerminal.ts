@@ -10,6 +10,38 @@ interface Options {
 }
 
 /**
+ * In-place rewrite of UTF-8 bytes for U+2591 ░, U+2592 ▒, U+2593 ▓ to
+ * U+2588 █ (full block). xterm's WebGL renderer draws ▒ as a literal dot
+ * grid via its custom-glyph table (`"▒":[[1,0],[0,0],[0,1],[0,0]]`), which
+ * is the "correct" Unicode rendering but doesn't match what Claude Code
+ * expects — iTerm/Terminal.app render ▒ as a solid translucent block, and
+ * Claude Code uses ▒ as a selection/highlight background. Substituting to
+ * █ makes WebGL's `blockElementDefinitions` kick in and draw a solid 8×8
+ * filled rect, which visually matches iTerm.
+ *
+ * UTF-8: ░=E2 96 91, ▒=E2 96 92, ▓=E2 96 93, █=E2 96 88. Same byte length,
+ * so we just patch the third byte.
+ *
+ * Edge case: if a frame ends mid-codepoint (after E2 or E2 96), the last
+ * byte arrives in the next frame — we won't catch that one. Rare enough
+ * to be a non-issue; xterm itself buffers partial UTF-8 fine.
+ */
+function substituteShadingToBlock(buf: Uint8Array): void {
+  const n = buf.length - 2;
+  for (let i = 0; i < n; i++) {
+    if (
+      buf[i] === 0xe2 &&
+      buf[i + 1] === 0x96 &&
+      buf[i + 2] >= 0x91 &&
+      buf[i + 2] <= 0x93
+    ) {
+      buf[i + 2] = 0x88;
+      i += 2;
+    }
+  }
+}
+
+/**
  * Wires an xterm.js terminal to a GalvoLite session's PTY over the
  * `/api/sessions/:id/terminal` WebSocket.
  *
@@ -67,11 +99,11 @@ export function useTerminal(
       container.replaceChildren();
       term.open(container);
       // Renderer preference: WebGL → Canvas → DOM. WebGL is the only renderer
-      // that honors `customGlyphs` for shading chars (░ ▒ ▓), drawing them as
-      // solid filled blocks instead of the font's literal dotted pattern —
-      // critical for Claude Code's progress-bar fill and selected-row
-      // highlight glyphs to render the way they do in iTerm2/Terminal.app.
-      // StrictMode is disabled in main.tsx to keep WebGL stable.
+      // that draws block-element glyphs (▀▁▂▃▄▅▆▇█▉▊▋▌▍▎▏▐) as solid filled
+      // rects via `blockElementDefinitions` — needed because we substitute
+      // ▒ → █ in the incoming bytestream below to match iTerm-style solid
+      // selection highlighting. StrictMode is disabled in main.tsx to keep
+      // WebGL stable across HMR double-mounts.
       try {
         const webgl = new WebglAddon();
         webgl.onContextLoss(() => webgl.dispose());
@@ -128,9 +160,11 @@ export function useTerminal(
         };
         ws.onmessage = (ev) => {
           if (ev.data instanceof ArrayBuffer) {
-            term.write(new Uint8Array(ev.data));
+            const u8 = new Uint8Array(ev.data);
+            substituteShadingToBlock(u8);
+            term.write(u8);
           } else if (typeof ev.data === "string") {
-            term.write(ev.data);
+            term.write(ev.data.replace(/[\u2591\u2592\u2593]/g, "\u2588"));
           }
         };
         ws.onclose = () => {
