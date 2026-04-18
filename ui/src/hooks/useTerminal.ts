@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { CanvasAddon } from "@xterm/addon-canvas";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { api } from "../api";
 
 interface Options {
@@ -65,13 +66,19 @@ export function useTerminal(
 
       container.replaceChildren();
       term.open(container);
-      // Canvas renderer paints all glyphs into a single canvas with no
-      // inter-cell gaps — fixes the squished half-block / shaded glyphs the
-      // DOM renderer leaves seams on (Claude pixel art, progress bars).
-      // WebGL would be sharper still but @xterm/addon-webgl@0.19 + xterm@5.5
-      // crash with `_isDisposed undefined` on StrictMode remounts even when
-      // deferred to rAF; canvas is the stable choice for this combo.
-      try { term.loadAddon(new CanvasAddon()); } catch { /* DOM fallback */ }
+      // Renderer preference: WebGL → Canvas → DOM. WebGL is the only renderer
+      // that honors `customGlyphs` for shading chars (░ ▒ ▓), drawing them as
+      // solid filled blocks instead of the font's literal dotted pattern —
+      // critical for Claude Code's progress-bar fill and selected-row
+      // highlight glyphs to render the way they do in iTerm2/Terminal.app.
+      // StrictMode is disabled in main.tsx to keep WebGL stable.
+      try {
+        const webgl = new WebglAddon();
+        webgl.onContextLoss(() => webgl.dispose());
+        term.loadAddon(webgl);
+      } catch {
+        try { term.loadAddon(new CanvasAddon()); } catch { /* DOM fallback */ }
+      }
       termRef.current = term;
 
       let ws: WebSocket | null = null;
