@@ -5,11 +5,12 @@ import "@xterm/xterm/css/xterm.css";
 interface Props {
   sessionId: string;
   mini?: boolean;
+  readOnly?: boolean;
 }
 
-export function TerminalPreview({ sessionId, mini = false }: Props) {
+export function TerminalPreview({ sessionId, mini = false, readOnly = true }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
-  useTerminal(containerRef, sessionId);
+  useTerminal(containerRef, sessionId, { readOnly });
 
   if (mini) {
     return (

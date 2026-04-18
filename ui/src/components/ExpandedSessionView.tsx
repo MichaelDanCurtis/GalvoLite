@@ -57,7 +57,7 @@ export function ExpandedSessionView({
         </header>
         <div className="flex flex-1 min-h-0">
           <div className="flex-1 min-w-0">
-            <TerminalPreview sessionId={session.id} />
+            <TerminalPreview sessionId={session.id} readOnly={session.autopilot} />
           </div>
           <SessionRail
             autopilot={session.autopilot}
