@@ -177,3 +177,70 @@ async fn full_api_lifecycle() {
         resp.status()
     );
 }
+
+#[tokio::test]
+async fn fs_list_returns_dir_entries() {
+    let tmp = tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    std::fs::create_dir(root.join("alpha")).unwrap();
+    std::fs::create_dir(root.join("beta")).unwrap();
+    std::fs::write(root.join("file.txt"), b"x").unwrap();
+
+    let Setup { app, .. } = setup();
+    let path = urlencoding::encode(root.to_str().unwrap());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/fs/list?path={}", path))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["path"], root.to_str().unwrap());
+    let entries = body["entries"].as_array().unwrap();
+    let names: Vec<&str> = entries.iter().map(|e| e["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"alpha"));
+    assert!(names.contains(&"beta"));
+    assert!(names.contains(&"file.txt"));
+    let alpha = entries.iter().find(|e| e["name"] == "alpha").unwrap();
+    assert_eq!(alpha["is_dir"], true);
+    let f = entries.iter().find(|e| e["name"] == "file.txt").unwrap();
+    assert_eq!(f["is_dir"], false);
+}
+
+#[tokio::test]
+async fn fs_list_rejects_relative_path() {
+    let Setup { app, .. } = setup();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/fs/list?path=relative/path")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn fs_list_rejects_missing_path() {
+    let Setup { app, .. } = setup();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/fs/list?path=/no/such/dir/anywhere/here")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}

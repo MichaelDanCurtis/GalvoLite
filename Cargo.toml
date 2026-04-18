@@ -36,6 +36,7 @@ tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
 libc = "0.2"
+urlencoding = "2"
 
 [[bin]]
 name = "galvolite"
