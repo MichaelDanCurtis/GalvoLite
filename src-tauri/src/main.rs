@@ -48,7 +48,8 @@ fn main() {
     // Dev convenience: when GALVOLITE_KEEP_API=1 is set, keep the API
     // server thread alive even after the Tauri window closes. Lets a
     // browser-based reload test (chrome on localhost:5173) survive
-    // accidental window closes during debugging.
+    // accidental window closes during debugging. Debug builds only.
+    #[cfg(debug_assertions)]
     if std::env::var("GALVOLITE_KEEP_API").is_ok() {
         if let Err(e) = &tauri_result {
             eprintln!("tauri exited ({e}); GALVOLITE_KEEP_API set, parking forever");
