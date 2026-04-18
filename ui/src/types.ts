@@ -60,6 +60,17 @@ export interface SendReq {
   newline?: boolean;
 }
 
+export interface DirectoryEntry {
+  name: string;
+  is_dir: boolean;
+}
+
+export interface DirectoryListing {
+  path: string;
+  parent: string | null;
+  entries: DirectoryEntry[];
+}
+
 export const STATE_COLORS: Record<SessionState, string> = {
   spawning: "bg-blue-400",
   working: "bg-green-400",

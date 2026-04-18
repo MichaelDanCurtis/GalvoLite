@@ -5,6 +5,7 @@ import type {
   CreateProjectReq,
   CreateSessionReq,
   SendReq,
+  DirectoryListing,
 } from "./types";
 
 const BASE = "";
@@ -77,6 +78,11 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ enabled }),
     }),
+
+  listDirectory: (path: string) =>
+    request<DirectoryListing>(
+      `/api/fs/list?path=${encodeURIComponent(path)}`,
+    ),
 
   terminalWsUrl: (id: string): string => {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
