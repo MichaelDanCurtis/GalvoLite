@@ -106,7 +106,19 @@ export function useTerminal(
       // WebGL stable across HMR double-mounts.
       try {
         const webgl = new WebglAddon();
-        webgl.onContextLoss(() => webgl.dispose());
+        // onContextLoss can fire DURING term.dispose() (which destroys the
+        // GL context as a side effect), at which point the addon's internal
+        // state is already torn down. Calling webgl.dispose() then throws
+        // `Cannot read properties of undefined (reading '_isDisposed')`,
+        // which propagates out of term.dispose() and crashes the React tree
+        // (no error boundary above ExpandedSessionView). Guard the second
+        // dispose so unmount doesn't blow up the whole UI.
+        let webglDisposed = false;
+        webgl.onContextLoss(() => {
+          if (webglDisposed) return;
+          webglDisposed = true;
+          try { webgl.dispose(); } catch { /* already torn down */ }
+        });
         term.loadAddon(webgl);
       } catch {
         try { term.loadAddon(new CanvasAddon()); } catch { /* DOM fallback */ }
@@ -197,7 +209,7 @@ export function useTerminal(
         ro.disconnect();
         window.removeEventListener("resize", safeFit);
         if (ws && ws.readyState <= WebSocket.OPEN) ws.close();
-        term.dispose();
+        try { term.dispose(); } catch { /* renderer may throw on teardown */ }
         termRef.current = null;
       };
     })();
