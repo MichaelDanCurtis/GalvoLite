@@ -26,6 +26,7 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route("/api/sessions/:id/autopilot", put(set_autopilot))
         .route("/api/sessions/:id/signals", get(get_signals))
         .route("/api/sessions/:id/terminal", get(terminal_ws))
+        .route("/api/fs/list", get(list_directory))
         .layer(CorsLayer::permissive())
         .with_state(mgr);
 
@@ -314,4 +315,79 @@ async fn handle_terminal_ws(
         _ = writer => {},
         _ = reader => {},
     }
+}
+
+// --- Filesystem browser (server-driven directory picker) ---
+
+#[derive(serde::Deserialize)]
+struct FsListQuery {
+    path: String,
+}
+
+#[derive(serde::Serialize)]
+struct FsEntry {
+    name: String,
+    is_dir: bool,
+}
+
+#[derive(serde::Serialize)]
+struct FsListing {
+    path: String,
+    parent: Option<String>,
+    entries: Vec<FsEntry>,
+}
+
+async fn list_directory(
+    axum::extract::Query(q): axum::extract::Query<FsListQuery>,
+) -> Response {
+    let p = std::path::PathBuf::from(&q.path);
+    if !p.is_absolute() {
+        return (StatusCode::BAD_REQUEST, "path must be absolute").into_response();
+    }
+    let canonical = match p.canonicalize() {
+        Ok(c) => c,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("path not accessible: {e}"))
+                .into_response()
+        }
+    };
+    if !canonical.is_dir() {
+        return (StatusCode::BAD_REQUEST, "path is not a directory").into_response();
+    }
+
+    let mut entries: Vec<FsEntry> = match std::fs::read_dir(&canonical) {
+        Ok(rd) => rd
+            .filter_map(|r| r.ok())
+            .map(|de| {
+                let name = de.file_name().to_string_lossy().into_owned();
+                let is_dir = de
+                    .file_type()
+                    .map(|t| t.is_dir())
+                    .unwrap_or(false);
+                FsEntry { name, is_dir }
+            })
+            .collect(),
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("read_dir failed: {e}"))
+                .into_response()
+        }
+    };
+    // Dirs first, then files; case-insensitive name within each group.
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    let parent = canonical
+        .parent()
+        .and_then(|p| p.to_str())
+        .map(|s| s.to_owned());
+
+    Json(FsListing {
+        path: canonical.to_string_lossy().into_owned(),
+        parent,
+        entries,
+    })
+    .into_response()
 }
