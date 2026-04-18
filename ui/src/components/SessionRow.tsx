@@ -1,6 +1,7 @@
 import type { Session } from "../types";
 import { STATE_COLORS } from "../types";
 import { api } from "../api";
+import { RoleBadge } from "./RoleBadge";
 
 interface Props {
   session: Session;
@@ -46,11 +47,10 @@ export function SessionRow({ session, onExpand, onRefresh }: Props) {
 
       <div className="flex-1 min-w-0">
         <div className="text-sm truncate">{session.task_summary}</div>
-        <div className="text-xs text-gray-500 truncate">
-          {session.role}
-          {session.branch ? ` \u00b7 ${session.branch}` : ""}
-          {" \u00b7 "}
-          {age}
+        <div className="flex items-center gap-2 text-xs text-gray-500">
+          <RoleBadge role={session.role} />
+          {session.branch && <span className="truncate">{session.branch}</span>}
+          <span>{age}</span>
         </div>
       </div>
 

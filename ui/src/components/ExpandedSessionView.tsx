@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import type { Session } from "../types";
 import { TerminalPreview } from "./TerminalPreview";
 import { SessionRail } from "./SessionRail";
+import { RoleBadge } from "./RoleBadge";
 
 interface Props {
   session: Session;
@@ -49,7 +50,7 @@ export function ExpandedSessionView({
       >
         <header className="px-4 py-2 border-b border-neutral-800 flex items-center justify-between text-xs text-neutral-300">
           <div>
-            <strong className="text-neutral-100">{session.role}</strong>{" "}
+            <RoleBadge role={session.role} />{" "}
             <span className="opacity-50">· {session.id} · {session.state}</span>
           </div>
           <div className="opacity-60">ESC or click outside to close</div>

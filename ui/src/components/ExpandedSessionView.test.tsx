@@ -31,7 +31,7 @@ describe("ExpandedSessionView", () => {
         onEnd={vi.fn()}
       />,
     );
-    expect(screen.getByText(/scout/)).toBeInTheDocument();
+    expect(screen.getByText(/SCOUT/)).toBeInTheDocument();
     expect(screen.getByText(/sess-1/)).toBeInTheDocument();
   });
 
