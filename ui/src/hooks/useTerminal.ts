@@ -128,10 +128,11 @@ export function useTerminal(
         requestAnimationFrame(() => {
           try {
             fit.fit();
-            sendResize();
           } catch {
-            /* renderer not ready yet */
+            /* renderer not ready yet — send anyway so the server still
+               produces a snapshot; ResizeObserver will retry shortly. */
           }
+          sendResize();
         });
       };
 
@@ -156,6 +157,12 @@ export function useTerminal(
 
         ws.onopen = () => {
           reconnectAttempt = 0;
+          // Always send a Resize on open: the server defers the snapshot
+          // until the client reports its grid dims, so a missing Resize
+          // here means a blank terminal on re-attach. fit() may not have
+          // run yet, but sending current dims (defaults if so) at least
+          // triggers the snapshot; safeFit re-sends with measured dims.
+          sendResize();
           safeFit();
         };
         ws.onmessage = (ev) => {
