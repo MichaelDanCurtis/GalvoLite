@@ -431,6 +431,19 @@ impl Db {
         Ok(rows)
     }
 
+    /// Mark all non-terminal sessions (`ended_at IS NULL`) as `Error`.
+    /// Called on startup to reconcile rows left in `Working`/`Spawning`/
+    /// `AttentionNeeded`/etc. by an abrupt server exit. Returns the number
+    /// of rows updated.
+    pub fn reconcile_orphaned_sessions(&self) -> Result<usize> {
+        let conn = self.pool.get()?;
+        let rows = conn.execute(
+            "UPDATE sessions SET state = ?1, ended_at = ?2 WHERE ended_at IS NULL",
+            params![SessionState::Error.to_string(), Utc::now().to_rfc3339()],
+        )?;
+        Ok(rows)
+    }
+
     pub fn update_session_state(&self, id: Uuid, state: SessionState) -> Result<()> {
         let conn = self.pool.get()?;
         let rows = conn.execute(

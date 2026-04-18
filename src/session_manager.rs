@@ -39,6 +39,11 @@ pub struct SessionManager {
 
 impl SessionManager {
     pub fn new(db: Db, data_dir: PathBuf) -> Self {
+        match db.reconcile_orphaned_sessions() {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("reconciled {n} orphaned session(s) to Error on startup"),
+            Err(e) => tracing::warn!("startup session reconciliation failed: {e}"),
+        }
         Self {
             db,
             data_dir,
