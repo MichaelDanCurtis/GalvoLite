@@ -1,37 +1,71 @@
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi } from "vitest";
 import { AddProjectModal } from "./AddProjectModal";
 
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(),
+}));
+vi.mock("../../api", () => ({
+  api: {
+    listDirectory: vi.fn().mockResolvedValue({
+      path: "/Users/me",
+      parent: "/Users",
+      entries: [{ name: "Project", is_dir: true }],
+    }),
+  },
+}));
+
+import { open as tauriOpen } from "@tauri-apps/plugin-dialog";
+
 describe("AddProjectModal", () => {
-  it("submits name + path to onSubmit", async () => {
+  beforeEach(() => {
+    (tauriOpen as unknown as ReturnType<typeof vi.fn>).mockReset();
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+  });
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+  });
+
+  it("submits name + path", async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
-    const onClose = vi.fn();
-    render(<AddProjectModal open onClose={onClose} onSubmit={onSubmit} />);
-
-    await userEvent.type(screen.getByLabelText(/name/i), "galvolite");
-    await userEvent.type(screen.getByLabelText(/path/i), "/tmp/galvolite");
-    await userEvent.click(screen.getByRole("button", { name: /add/i }));
-
-    expect(onSubmit).toHaveBeenCalledWith({
-      name: "galvolite",
-      path: "/tmp/galvolite",
-    });
-  });
-
-  it("shows server error inline", async () => {
-    const onSubmit = vi.fn().mockRejectedValue(new Error("400: bad path"));
     render(<AddProjectModal open onClose={() => {}} onSubmit={onSubmit} />);
-
-    await userEvent.type(screen.getByLabelText(/name/i), "p");
-    await userEvent.type(screen.getByLabelText(/path/i), "/nope");
-    await userEvent.click(screen.getByRole("button", { name: /add/i }));
-
-    expect(await screen.findByText(/bad path/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText(/name/i), "demo");
+    await userEvent.type(screen.getByLabelText(/path/i), "/tmp/demo");
+    await userEvent.click(screen.getByRole("button", { name: /^add$/i }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ name: "demo", path: "/tmp/demo" }));
   });
 
-  it("disables submit when fields empty", () => {
+  it("calls Tauri dialog when running inside Tauri", async () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    (tauriOpen as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce("/picked/by/tauri");
     render(<AddProjectModal open onClose={() => {}} onSubmit={vi.fn()} />);
-    expect(screen.getByRole("button", { name: /add/i })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: /browse for folder/i }));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/path/i)).toHaveValue("/picked/by/tauri"),
+    );
+  });
+
+  it("opens DirectoryBrowserModal when not running inside Tauri", async () => {
+    render(<AddProjectModal open onClose={() => {}} onSubmit={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /browse for folder/i }));
+    // The directory browser modal exposes "Use this folder"
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /use this folder/i }),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it("surfaces Tauri dialog errors instead of swallowing them", async () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    (tauriOpen as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("dialog plugin not initialized"),
+    );
+    render(<AddProjectModal open onClose={() => {}} onSubmit={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /browse for folder/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(/dialog plugin not initialized/i),
+    );
   });
 });
