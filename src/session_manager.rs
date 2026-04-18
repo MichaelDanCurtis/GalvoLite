@@ -413,6 +413,17 @@ impl SessionManager {
         rs.handle.resize(cols, rows)
     }
 
+    /// Write bytes to the running session's pty (i.e. into the child
+    /// process's stdin). Used by the terminal WebSocket for keystrokes.
+    pub async fn write_pty(&self, id: Uuid, bytes: Vec<u8>) -> Result<()> {
+        let handle = {
+            let running = self.running.lock().unwrap();
+            let rs = running.get(&id).ok_or(Error::SessionNotRunning(id))?;
+            rs.handle.clone()
+        };
+        handle.write(&bytes).await
+    }
+
     pub fn get_signals(&self, id: Uuid) -> Result<Vec<crate::db::SignalRow>> {
         self.db.list_signals_for_session(id)
     }
