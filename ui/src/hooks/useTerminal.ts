@@ -65,7 +65,13 @@ export function useTerminal(
 
       container.replaceChildren();
       term.open(container);
-      try { term.loadAddon(new CanvasAddon()); } catch { /* fall back to DOM renderer */ }
+      // Canvas renderer paints all glyphs into a single canvas with no
+      // inter-cell gaps — fixes the squished half-block / shaded glyphs the
+      // DOM renderer leaves seams on (Claude pixel art, progress bars).
+      // WebGL would be sharper still but @xterm/addon-webgl@0.19 + xterm@5.5
+      // crash with `_isDisposed undefined` on StrictMode remounts even when
+      // deferred to rAF; canvas is the stable choice for this combo.
+      try { term.loadAddon(new CanvasAddon()); } catch { /* DOM fallback */ }
       termRef.current = term;
 
       let ws: WebSocket | null = null;
