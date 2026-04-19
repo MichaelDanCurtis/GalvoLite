@@ -140,10 +140,17 @@ impl SessionManager {
 
         let fx = Arc::new(PtySideEffects::new(handle.clone()));
         let driver = Arc::new(RitualDriver::new(fx));
-        if let Err(e) = self
-            .db
-            .update_session_state(session.id, SessionState::Working)
-        {
+        let started = crate::state::apply_event(
+            &self.db,
+            session.id,
+            crate::state::EventInput {
+                source: crate::state::Source::System,
+                kind: "system.session_started".into(),
+                payload: serde_json::json!({ "role": session.role.clone() }),
+                dedup_key: Some(format!("session-started:{}", session.id)),
+            },
+        );
+        if let Err(e) = started {
             handle.kill();
             let _ = self.db.end_cycle_if_unended(cycle_id, None);
             let _ = self
@@ -220,7 +227,16 @@ impl SessionManager {
                     .map(|p| p.to_string_lossy().into_owned());
                 let _ = mgr.db.end_cycle_if_unended(prev, handoff_path.as_deref());
             }
-            let _ = mgr.db.end_session_if_unended(session_id, SessionState::Ended);
+            let _ = crate::state::apply_event(
+                &mgr.db,
+                session_id,
+                crate::state::EventInput {
+                    source: crate::state::Source::System,
+                    kind: "system.session_ended".into(),
+                    payload: serde_json::json!({ "reason": "pty_exit" }),
+                    dedup_key: Some(format!("session-ended:{session_id}")),
+                },
+            );
             let mut running = mgr.running.lock().unwrap();
             running.remove(&session_id);
         });
@@ -334,8 +350,23 @@ impl SessionManager {
         }
         // Conditional write: if the session already ended naturally
         // (e.g. Complete), we must not clobber that terminal state.
-        let killed = self.db.end_session_if_unended(id, SessionState::Ended)?;
-        if !was_running && !killed {
+        // Route through apply_event so events log + sessions.state move
+        // atomically. dedup_key collapses any race against the bg-task
+        // pty_exit path; one wins, one no-ops. Terminal-state guard inside
+        // apply_event also returns Err if already Ended — treat as "not
+        // killed by us" rather than bubbling.
+        let killed = crate::state::apply_event(
+            &self.db,
+            id,
+            crate::state::EventInput {
+                source: crate::state::Source::Operator,
+                kind: "system.session_ended".into(),
+                payload: serde_json::json!({ "reason": "operator_kill" }),
+                dedup_key: Some(format!("session-ended:{id}")),
+            },
+        );
+        let killed_ok = killed.is_ok();
+        if !was_running && !killed_ok {
             // Not in the running map, and the DB says it was already ended.
             // Report this rather than silently succeeding.
             return Err(Error::SessionNotRunning(id));

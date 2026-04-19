@@ -214,6 +214,17 @@ pub fn apply_event(
         rusqlite::params![next.to_string(), session_id.to_string()],
     )?;
 
+    // For terminal next_states, stamp ended_at if not already set. This
+    // moves the lifecycle close into the same transaction as the state
+    // update (spec §8.3 atomicity).
+    if matches!(next, SessionState::Ended | SessionState::Error) {
+        tx.execute(
+            "UPDATE sessions SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+             WHERE id = ?1 AND ended_at IS NULL",
+            [session_id.to_string()],
+        )?;
+    }
+
     tx.commit()?;
     Ok(EventOutcome {
         event_id,
@@ -229,7 +240,13 @@ fn transition(current: SessionState, kind: &str) -> SessionState {
     use SessionState::*;
     match (current, kind) {
         // Lifecycle (used by SessionManager via Task 7 + Sub-plan 2 hooks).
-        (Starting, "system.session_started") | (Starting, "hook.SessionStart") => Idle,
+        // Per spec §8.6, SessionStart → Idle. SessionManager spawn_session,
+        // however, immediately writes the inject prompt right after spawn —
+        // which the future hook surface (Sub-plan 2) will model as
+        // operator.user_prompt_submit pushing Idle → Working. Until that
+        // surface lands, recognize the synthetic kind so spawn lands the
+        // session in Working in one event.
+        (Starting, "system.session_started") | (Starting, "hook.SessionStart") => Working,
         (_,        "system.session_ended")   | (_,        "hook.SessionEnd")   => Ended,
         (_,        "system.session_orphaned")                                  => Error,
 
