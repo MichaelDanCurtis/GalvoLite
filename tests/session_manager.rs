@@ -78,7 +78,7 @@ async fn kill_session_marks_killed() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     let s = mgr.get_session(session.id).unwrap();
-    assert_eq!(s.state, SessionState::Killed);
+    assert_eq!(s.state, SessionState::Ended);
     assert!(s.ended_at.is_some());
     // Running-map entry should be cleared (either by kill_session directly
     // or by the bg task after the child process was terminated).

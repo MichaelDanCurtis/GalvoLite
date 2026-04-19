@@ -22,7 +22,7 @@ fn insert_and_fetch_project() {
 }
 
 #[test]
-fn insert_session_starts_in_spawning() {
+fn insert_session_starts_in_starting() {
     let (_tmp, db) = open_db();
     let proj = db.insert_project(NewProject {
         name: "p".into(), path: "/tmp/p".into(), remote_url: None,
@@ -37,7 +37,7 @@ fn insert_session_starts_in_spawning() {
         parent_session_id: None,
     }).unwrap();
 
-    assert_eq!(s.state, SessionState::Spawning);
+    assert_eq!(s.state, SessionState::Starting);
     let fetched = db.get_session(s.id).unwrap();
     assert_eq!(fetched.task_summary, "test");
 }
@@ -119,11 +119,11 @@ fn list_sessions_returns_full_data_without_n_plus_one() {
 
 #[test]
 fn session_state_serializes_to_snake_case() {
-    let json = serde_json::to_string(&galvolite::db::SessionState::AttentionNeeded).unwrap();
-    assert_eq!(json, "\"attention_needed\"");
+    let json = serde_json::to_string(&galvolite::db::SessionState::NeedsAttention).unwrap();
+    assert_eq!(json, "\"needs_attention\"");
 
-    let json = serde_json::to_string(&galvolite::db::SessionState::HandingOff).unwrap();
-    assert_eq!(json, "\"handing_off\"");
+    let json = serde_json::to_string(&galvolite::db::SessionState::AwaitingInput).unwrap();
+    assert_eq!(json, "\"awaiting_input\"");
 
     let back: galvolite::db::SessionState = serde_json::from_str("\"working\"").unwrap();
     assert_eq!(back, galvolite::db::SessionState::Working);
@@ -142,19 +142,21 @@ fn end_session_if_unended_is_conditional() {
     }).unwrap();
 
     // First call: session is unended, should update and return true.
-    let did = db.end_session_if_unended(s.id, SessionState::Complete).unwrap();
+    let did = db.end_session_if_unended(s.id, SessionState::Ended).unwrap();
     assert!(did);
     let fetched = db.get_session(s.id).unwrap();
-    assert_eq!(fetched.state, SessionState::Complete);
+    assert_eq!(fetched.state, SessionState::Ended);
     assert!(fetched.ended_at.is_some());
     let first_ended_at = fetched.ended_at.unwrap();
 
     // Second call: already ended, should be a no-op returning false.
-    // Try to clobber with Killed — must not succeed.
-    let did_again = db.end_session_if_unended(s.id, SessionState::Killed).unwrap();
+    // Try to clobber with another terminal write — must not succeed.
+    // (v1 distinguished Complete vs Killed; v2 collapses both to Ended,
+    // with the events log being the new "why" source of truth.)
+    let did_again = db.end_session_if_unended(s.id, SessionState::Ended).unwrap();
     assert!(!did_again);
     let fetched = db.get_session(s.id).unwrap();
-    assert_eq!(fetched.state, SessionState::Complete);
+    assert_eq!(fetched.state, SessionState::Ended);
     assert_eq!(fetched.ended_at.unwrap(), first_ended_at);
 }
 

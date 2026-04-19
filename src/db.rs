@@ -3,13 +3,22 @@ use chrono::{DateTime, Utc};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
-use serde::{Deserialize, Serialize};
-use std::fmt;
+use serde::Serialize;
 use std::path::Path;
 use std::str::FromStr;
 use uuid::Uuid;
 
+pub use crate::state::SessionState;
+
 const SCHEMA_V1: &str = include_str!("../migrations/0001_initial.sql");
+const SCHEMA_V2: &str = include_str!("../migrations/0002_hooks_mcp_foundations.sql");
+
+/// (version, sql_body). Order matters: applied lowest-to-highest. Each entry
+/// is applied iff the version is not present in `schema_version`.
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, SCHEMA_V1),
+    (2, SCHEMA_V2),
+];
 
 #[derive(Clone)]
 pub struct Db {
@@ -42,26 +51,36 @@ impl Db {
 
     fn migrate(&self) -> Result<()> {
         let mut conn = self.pool.get()?;
-        let tx = conn.transaction()?;
 
-        tx.execute_batch(SCHEMA_V1)?;
+        // Bootstrap: schema_version itself is created by 0001_initial.sql, so the
+        // very first call needs to run that file unconditionally before we can
+        // query for applied versions.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                 version    INTEGER NOT NULL PRIMARY KEY,
+                 applied_at TEXT NOT NULL
+             );",
+        )?;
 
-        let already_applied: Option<i64> = tx
-            .query_row(
-                "SELECT version FROM schema_version WHERE version = 1",
-                [],
-                |r| r.get(0),
-            )
-            .ok();
-
-        if already_applied.is_none() {
+        for (version, body) in MIGRATIONS {
+            let already: Option<i64> = conn
+                .query_row(
+                    "SELECT version FROM schema_version WHERE version = ?1",
+                    params![*version],
+                    |r| r.get(0),
+                )
+                .ok();
+            if already.is_some() {
+                continue;
+            }
+            let tx = conn.transaction()?;
+            tx.execute_batch(body)?;
             tx.execute(
                 "INSERT INTO schema_version (version, applied_at) VALUES (?1, ?2)",
-                params![1i64, Utc::now().to_rfc3339()],
+                params![*version, Utc::now().to_rfc3339()],
             )?;
+            tx.commit()?;
         }
-
-        tx.commit()?;
         Ok(())
     }
 }
@@ -106,52 +125,6 @@ pub struct NewProject {
     pub name: String,
     pub path: String,
     pub remote_url: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionState {
-    Spawning,
-    Working,
-    AttentionNeeded,
-    HandingOff,
-    Restoring,
-    Complete,
-    Killed,
-    Error,
-}
-
-impl fmt::Display for SessionState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Self::Spawning => "spawning",
-            Self::Working => "working",
-            Self::AttentionNeeded => "attention_needed",
-            Self::HandingOff => "handing_off",
-            Self::Restoring => "restoring",
-            Self::Complete => "complete",
-            Self::Killed => "killed",
-            Self::Error => "error",
-        };
-        f.write_str(s)
-    }
-}
-
-impl FromStr for SessionState {
-    type Err = Error;
-    fn from_str(s: &str) -> Result<Self> {
-        Ok(match s {
-            "spawning" => Self::Spawning,
-            "working" => Self::Working,
-            "attention_needed" => Self::AttentionNeeded,
-            "handing_off" => Self::HandingOff,
-            "restoring" => Self::Restoring,
-            "complete" => Self::Complete,
-            "killed" => Self::Killed,
-            "error" => Self::Error,
-            other => return Err(Error::Config(format!("unknown session state: {other}"))),
-        })
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -300,7 +273,7 @@ impl Db {
     pub fn insert_session(&self, new: NewSession) -> Result<Session> {
         let id = Uuid::new_v4();
         let now = Utc::now();
-        let state = SessionState::Spawning;
+        let state = SessionState::Starting;
         let conn = self.pool.get()?;
         conn.execute(
             "INSERT INTO sessions
@@ -568,6 +541,54 @@ impl Db {
             params![Utc::now().to_rfc3339(), handoff_path, cycle_id.to_string()],
         )?;
         Ok(rows > 0)
+    }
+
+    /// Append one row to the `events` log inside a caller-supplied transaction.
+    /// Returns `(rowid, deduped)` where `deduped = true` if `dedup_key` was
+    /// already present (no row was written).
+    ///
+    /// This is the low-level helper. Callers must use [`crate::state::apply_event`]
+    /// for state-changing events so the events row and the sessions update land
+    /// inside the same transaction.
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_event_in_tx(
+        tx: &rusqlite::Transaction<'_>,
+        session_id: Uuid,
+        source: &str,
+        kind: &str,
+        payload_json: &str,
+        prev_state: Option<&str>,
+        next_state: Option<&str>,
+        dedup_key: Option<&str>,
+    ) -> Result<(i64, bool)> {
+        if let Some(key) = dedup_key {
+            use rusqlite::OptionalExtension;
+            let existing: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM events WHERE dedup_key = ?1",
+                    params![key],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(id) = existing {
+                return Ok((id, true));
+            }
+        }
+        tx.execute(
+            "INSERT INTO events
+                (session_id, source, kind, payload_json, prev_state, next_state, dedup_key)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                session_id.to_string(),
+                source,
+                kind,
+                payload_json,
+                prev_state,
+                next_state,
+                dedup_key,
+            ],
+        )?;
+        Ok((tx.last_insert_rowid(), false))
     }
 
     pub fn record_signal(

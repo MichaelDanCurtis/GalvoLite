@@ -351,8 +351,10 @@ impl SignalPump {
         let task = tokio::spawn(async move {
             while let Some(line) = pty.next_line().await {
                 if let Some(sig) = parse_signal(&line) {
-                    // Read the current cycle id on each signal so rotations
-                    // (STATUS:COMPLETE → new cycle) are reflected immediately.
+                    // Legacy: write to the `signals` table for the old API path.
+                    // Sub-plan 5 removes this. The new pipeline below funnels the
+                    // same data through state::apply_event so the events log is
+                    // populated even though hooks/MCP haven't shipped yet.
                     let cur_cycle = *cycle_id.lock().unwrap();
                     let _ = db.record_signal(
                         session_id,
@@ -360,6 +362,25 @@ impl SignalPump {
                         sig.kind(),
                         sig.payload().as_deref(),
                     );
+
+                    // New funnel path. Source::System because the legacy parser
+                    // is an internal bridge, not a model-chosen MCP tool.
+                    let _ = crate::state::apply_event(
+                        &db,
+                        session_id,
+                        crate::state::EventInput {
+                            source: crate::state::Source::System,
+                            kind: format!("signal.{}", sig.kind()),
+                            payload: serde_json::json!({
+                                "raw_kind": sig.kind(),
+                                "payload": sig.payload(),
+                            }),
+                            // Allow replays (no dedup) — the signals table
+                            // already has its own append history.
+                            dedup_key: None,
+                        },
+                    );
+
                     if let Signal::RoleSet { role } = &sig {
                         let _ = db.set_session_role(session_id, role);
                     }
