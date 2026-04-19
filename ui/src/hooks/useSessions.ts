@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { Session } from "../types";
+import type { Session, CreateSessionReq } from "../types";
 
-export function useSessions(pollIntervalMs = 2000) {
+export function useSessions(pollIntervalMs = 5000) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -26,5 +26,26 @@ export function useSessions(pollIntervalMs = 2000) {
     return () => clearInterval(intervalRef.current);
   }, [pollIntervalMs]);
 
-  return { sessions, loading, error, refresh };
+  const createSession = async (req: CreateSessionReq): Promise<Session> => {
+    const s = await api.createSession(req);
+    refresh();
+    return s;
+  };
+
+  const sendText = (id: string, text: string) =>
+    api.sendToSession(id, { text, newline: true });
+
+  const triggerHandoff = (id: string) => api.triggerHandoff(id);
+
+  const killSession = async (id: string): Promise<void> => {
+    await api.killSession(id);
+    refresh();
+  };
+
+  const toggleAutopilot = async (id: string, enabled: boolean): Promise<void> => {
+    await api.setAutopilot(id, enabled);
+    refresh();
+  };
+
+  return { sessions, loading, error, refresh, createSession, sendText, triggerHandoff, killSession, toggleAutopilot };
 }

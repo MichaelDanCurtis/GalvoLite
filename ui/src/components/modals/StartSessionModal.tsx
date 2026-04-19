@@ -1,0 +1,85 @@
+import { useState } from "react";
+import { Modal } from "./Modal";
+import type { CreateSessionReq } from "../../types";
+
+interface Props {
+  open: boolean;
+  onClose: () => void;
+  onSubmit: (req: CreateSessionReq) => Promise<unknown>;
+  projectId: string;
+}
+
+export function StartSessionModal({ open, onClose, onSubmit, projectId }: Props) {
+  const [task, setTask] = useState("");
+  const [cmd, setCmd] = useState("claude");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const canSubmit = task.trim().length > 0 && !busy;
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onSubmit({
+        project_id: projectId,
+        task: task.trim(),
+        claude_cmd: cmd.trim(),
+      });
+      setTask("");
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Start Session">
+      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+        <label className="flex flex-col gap-1 text-xs">
+          <span className="text-neutral-400">Task</span>
+          <input
+            className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-sm text-neutral-100"
+            value={task}
+            onChange={(e) => setTask(e.target.value)}
+            autoFocus
+            placeholder="Short description of what this session should do"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs">
+          <span className="text-neutral-400">Command</span>
+          <input
+            className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-sm text-neutral-100 font-mono"
+            value={cmd}
+            onChange={(e) => setCmd(e.target.value)}
+          />
+        </label>
+        {error && (
+          <p className="text-xs text-red-400" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            className="px-3 py-1 text-sm text-neutral-400 hover:text-neutral-100"
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="px-3 py-1 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded text-white"
+            disabled={!canSubmit}
+          >
+            {busy ? "Starting…" : "Start"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}

@@ -1,15 +1,15 @@
 import type { Session } from "../types";
 import { STATE_COLORS } from "../types";
 import { api } from "../api";
+import { RoleBadge } from "./RoleBadge";
 
 interface Props {
   session: Session;
-  onSelect: (id: string) => void;
-  selected: boolean;
+  onExpand?: (s: Session) => void;
   onRefresh: () => void;
 }
 
-export function SessionRow({ session, onSelect, selected, onRefresh }: Props) {
+export function SessionRow({ session, onExpand, onRefresh }: Props) {
   const dotColor = STATE_COLORS[session.state] ?? "bg-gray-400";
 
   const handleKill = async (e: React.MouseEvent) => {
@@ -32,20 +32,25 @@ export function SessionRow({ session, onSelect, selected, onRefresh }: Props) {
 
   return (
     <div
-      className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-gray-800 hover:bg-gray-800/50 ${
-        selected ? "bg-gray-800" : ""
-      }`}
-      onClick={() => onSelect(session.id)}
+      role="button"
+      tabIndex={0}
+      className="flex items-center gap-3 px-4 py-3 w-full text-left cursor-pointer border-b border-gray-800 hover:bg-gray-800/50 focus:outline-none focus:bg-gray-800/70"
+      onClick={() => onExpand?.(session)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onExpand?.(session);
+        }
+      }}
     >
       <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${dotColor}`} />
 
       <div className="flex-1 min-w-0">
         <div className="text-sm truncate">{session.task_summary}</div>
-        <div className="text-xs text-gray-500 truncate">
-          {session.role}
-          {session.branch ? ` \u00b7 ${session.branch}` : ""}
-          {" \u00b7 "}
-          {age}
+        <div className="flex items-center gap-2 text-xs text-gray-500">
+          <RoleBadge role={session.role} />
+          {session.branch && <span className="truncate">{session.branch}</span>}
+          <span>{age}</span>
         </div>
       </div>
 

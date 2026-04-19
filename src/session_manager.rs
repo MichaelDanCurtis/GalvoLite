@@ -8,7 +8,7 @@ use crate::claude_md::{implementation_profile, InjectionPrompt};
 use crate::db::{Db, NewSession, Session, SessionState};
 use crate::error::{Error, Result};
 use crate::handoff::HandoffDir;
-use crate::pty::{CycleSlot, PtyHandle, PtyHandleShared, PtyOpts, SignalPump};
+use crate::pty::{CycleSlot, PtyHandle, PtyHandleShared, PtyOpts, Scrollback, SignalPump};
 use crate::ritual::{PtySideEffects, RitualDriver};
 use crate::signals::Signal;
 use std::collections::HashMap;
@@ -20,7 +20,7 @@ use uuid::Uuid;
 struct RunningSession {
     driver: Arc<RitualDriver>,
     handle: PtyHandleShared,
-    output_tx: broadcast::Sender<String>,
+    scrollback: Arc<Scrollback>,
     /// Current cycle id for this running session. Shared with the
     /// [`SignalPump`] recording task so rotation on STATUS:COMPLETE
     /// immediately re-attributes signals to the new cycle.
@@ -39,6 +39,11 @@ pub struct SessionManager {
 
 impl SessionManager {
     pub fn new(db: Db, data_dir: PathBuf) -> Self {
+        match db.reconcile_orphaned_sessions() {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("reconciled {n} orphaned session(s) to Error on startup"),
+            Err(e) => tracing::warn!("startup session reconciliation failed: {e}"),
+        }
         Self {
             db,
             data_dir,
@@ -131,7 +136,7 @@ impl SessionManager {
         let cycle_id_slot: CycleSlot = Arc::new(StdMutex::new(Some(cycle_id)));
         let pump = SignalPump::start(pty, self.db.clone(), session.id, cycle_id_slot.clone());
         let handle = pump.handle();
-        let output_tx = pump.output_sender();
+        let scrollback = pump.scrollback();
 
         let fx = Arc::new(PtySideEffects::new(handle.clone()));
         let driver = Arc::new(RitualDriver::new(fx));
@@ -158,7 +163,7 @@ impl SessionManager {
                 RunningSession {
                     driver: driver.clone(),
                     handle: handle.clone(),
-                    output_tx,
+                    scrollback,
                     cycle_id: cycle_id_slot.clone(),
                     handoff_dir: handoff_dir.clone(),
                 },
@@ -338,6 +343,47 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Toggle the session's `autopilot` flag. State-only in Plan 2; Plan 3
+    /// wires behavior off this flag.
+    pub async fn set_autopilot(&self, id: Uuid, enabled: bool) -> Result<()> {
+        self.db.set_session_autopilot(id, enabled)
+    }
+
+    /// Cascade-delete a project: kill any running sessions under this project,
+    /// then purge rows via `Db::delete_project_cascade`.
+    ///
+    /// Returns `Error::ProjectNotFound` if the id is unknown.
+    /// Kill errors on a per-session basis are best-effort: if a PTY is already
+    /// dead the session row is still purged. If every kill succeeds but the
+    /// cascade fails (e.g. DB closed), the kills are not rolled back.
+    pub async fn delete_project(&self, project_id: Uuid) -> Result<()> {
+        // Early 404 so we don't half-kill sessions of a nonexistent project.
+        let _ = self.db.get_project(project_id).map_err(|e| match e {
+            Error::Db(rusqlite::Error::QueryReturnedNoRows) => Error::ProjectNotFound(project_id),
+            other => other,
+        })?;
+
+        // Snapshot sessions that belong to this project and are currently running.
+        let running: Vec<Uuid> = self
+            .db
+            .list_sessions()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|s| s.project_id == project_id)
+            .map(|s| s.id)
+            .filter(|id| self.running_ids().contains(id))
+            .collect();
+
+        for id in running {
+            if let Err(e) = self.kill_session(id).await {
+                tracing::warn!(session_id = %id, error = ?e, "kill during project delete failed; continuing");
+            }
+        }
+
+        self.db.delete_project_cascade(project_id)?;
+        Ok(())
+    }
+
     /// Number of sessions currently tracked in the running map.
     /// Useful for tests and diagnostics; not part of the stable API.
     #[doc(hidden)]
@@ -356,10 +402,61 @@ impl SessionManager {
         self.running.lock().unwrap().keys().copied().collect()
     }
 
-    pub fn subscribe_output(&self, id: Uuid) -> Result<broadcast::Receiver<String>> {
+    /// Returns `(scrollback_snapshot, future_bytes_receiver)`. The snapshot
+    /// is the current ring-buffer contents (most recent ~256 KiB of PTY
+    /// output); the receiver streams everything after the subscribe point.
+    /// Together they let a fresh terminal client repaint to the child's
+    /// current screen state instead of starting from blank.
+    pub fn subscribe_output(
+        &self,
+        id: Uuid,
+    ) -> Result<(Vec<u8>, broadcast::Receiver<Vec<u8>>)> {
         let running = self.running.lock().unwrap();
         let rs = running.get(&id).ok_or(Error::SessionNotRunning(id))?;
-        Ok(rs.output_tx.subscribe())
+        Ok(rs.scrollback.snapshot_and_subscribe())
+    }
+
+    /// Subscribe for future PTY bytes only (no initial snapshot). The
+    /// terminal WebSocket pairs this with [`SessionManager::snapshot_terminal`]
+    /// taken AFTER the client has reported its grid dims via a resize frame.
+    /// See `terminal_ws` for why the snapshot is deferred.
+    pub fn subscribe_output_only(
+        &self,
+        id: Uuid,
+    ) -> Result<broadcast::Receiver<Vec<u8>>> {
+        let running = self.running.lock().unwrap();
+        let rs = running.get(&id).ok_or(Error::SessionNotRunning(id))?;
+        Ok(rs.scrollback.subscribe())
+    }
+
+    /// Capture the session's current screen state as a self-contained ANSI
+    /// repaint sequence. Call after `resize_pty` so the cursor positions in
+    /// the snapshot match the client's actual grid.
+    pub fn snapshot_terminal(&self, id: Uuid) -> Result<Vec<u8>> {
+        let running = self.running.lock().unwrap();
+        let rs = running.get(&id).ok_or(Error::SessionNotRunning(id))?;
+        Ok(rs.scrollback.snapshot())
+    }
+
+    /// Resize the underlying pty for a running session.
+    ///
+    /// Forwarded from the terminal WebSocket when the client reports a new
+    /// cell grid. The child process receives SIGWINCH and can redraw.
+    pub fn resize_pty(&self, id: Uuid, cols: u16, rows: u16) -> Result<()> {
+        let running = self.running.lock().unwrap();
+        let rs = running.get(&id).ok_or(Error::SessionNotRunning(id))?;
+        rs.handle.resize(cols, rows)
+    }
+
+    /// Write bytes to the running session's pty (i.e. into the child
+    /// process's stdin). Used by the terminal WebSocket for keystrokes.
+    pub async fn write_pty(&self, id: Uuid, bytes: Vec<u8>) -> Result<()> {
+        let handle = {
+            let running = self.running.lock().unwrap();
+            let rs = running.get(&id).ok_or(Error::SessionNotRunning(id))?;
+            rs.handle.clone()
+        };
+        handle.write(&bytes).await
     }
 
     pub fn get_signals(&self, id: Uuid) -> Result<Vec<crate::db::SignalRow>> {

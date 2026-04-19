@@ -41,7 +41,23 @@ fn main() {
 
     std::thread::sleep(std::time::Duration::from_millis(200));
 
-    tauri::Builder::default()
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+    let tauri_result = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .run(tauri::generate_context!());
+
+    // Dev convenience: when GALVOLITE_KEEP_API=1 is set, keep the API
+    // server thread alive even after the Tauri window closes. Lets a
+    // browser-based reload test (chrome on localhost:5173) survive
+    // accidental window closes during debugging. Debug builds only.
+    #[cfg(debug_assertions)]
+    if std::env::var("GALVOLITE_KEEP_API").is_ok() {
+        if let Err(e) = &tauri_result {
+            eprintln!("tauri exited ({e}); GALVOLITE_KEEP_API set, parking forever");
+        } else {
+            eprintln!("tauri window closed; GALVOLITE_KEEP_API set, parking forever");
+        }
+        std::thread::park();
+    }
+
+    tauri_result.expect("error while running tauri application");
 }

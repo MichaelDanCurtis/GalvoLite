@@ -255,6 +255,48 @@ impl Db {
         Ok(rows)
     }
 
+    /// Cascade-delete a project: every signal, cycle, session row and finally
+    /// the project row, inside a single transaction.
+    ///
+    /// Returns `Error::ProjectNotFound` if the id isn't present.
+    pub fn delete_project_cascade(&self, id: uuid::Uuid) -> Result<()> {
+        use rusqlite::OptionalExtension;
+        let mut conn = self.pool.get()?;
+        let tx = conn.transaction()?;
+
+        // Verify the project exists first so we can return a clean 404.
+        let exists: bool = tx
+            .query_row(
+                "SELECT 1 FROM projects WHERE id = ?1",
+                params![id.to_string()],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !exists {
+            return Err(Error::ProjectNotFound(id));
+        }
+
+        tx.execute(
+            "DELETE FROM signals WHERE session_id IN
+                (SELECT id FROM sessions WHERE project_id = ?1)",
+            params![id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM cycles WHERE session_id IN
+                (SELECT id FROM sessions WHERE project_id = ?1)",
+            params![id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM sessions WHERE project_id = ?1",
+            params![id.to_string()],
+        )?;
+        tx.execute("DELETE FROM projects WHERE id = ?1", params![id.to_string()])?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn insert_session(&self, new: NewSession) -> Result<Session> {
         let id = Uuid::new_v4();
         let now = Utc::now();
@@ -389,6 +431,19 @@ impl Db {
         Ok(rows)
     }
 
+    /// Mark all non-terminal sessions (`ended_at IS NULL`) as `Error`.
+    /// Called on startup to reconcile rows left in `Working`/`Spawning`/
+    /// `AttentionNeeded`/etc. by an abrupt server exit. Returns the number
+    /// of rows updated.
+    pub fn reconcile_orphaned_sessions(&self) -> Result<usize> {
+        let conn = self.pool.get()?;
+        let rows = conn.execute(
+            "UPDATE sessions SET state = ?1, ended_at = ?2 WHERE ended_at IS NULL",
+            params![SessionState::Error.to_string(), Utc::now().to_rfc3339()],
+        )?;
+        Ok(rows)
+    }
+
     pub fn update_session_state(&self, id: Uuid, state: SessionState) -> Result<()> {
         let conn = self.pool.get()?;
         let rows = conn.execute(
@@ -407,6 +462,36 @@ impl Db {
             "UPDATE sessions SET pty_pid = ?1 WHERE id = ?2",
             params![pid, id.to_string()],
         )?;
+        Ok(())
+    }
+
+    /// Set the `autopilot` flag on a session row.
+    /// Returns `Error::SessionNotFound` if no row was updated.
+    pub fn set_session_autopilot(&self, id: uuid::Uuid, enabled: bool) -> Result<()> {
+        let conn = self.pool.get()?;
+        let rows = conn.execute(
+            "UPDATE sessions SET autopilot = ?1 WHERE id = ?2",
+            params![enabled as i64, id.to_string()],
+        )?;
+        if rows == 0 {
+            return Err(Error::SessionNotFound(id));
+        }
+        Ok(())
+    }
+
+    /// Replace the `role` column on a session row. Used by SignalPump when
+    /// it observes a `[ROLE:SET role="..."]` signal so the UI can reflect
+    /// mid-session role transitions.
+    /// Returns `Error::SessionNotFound` if no row was updated.
+    pub fn set_session_role(&self, id: Uuid, role: &str) -> Result<()> {
+        let conn = self.pool.get()?;
+        let rows = conn.execute(
+            "UPDATE sessions SET role = ?1 WHERE id = ?2",
+            params![role, id.to_string()],
+        )?;
+        if rows == 0 {
+            return Err(Error::SessionNotFound(id));
+        }
         Ok(())
     }
 

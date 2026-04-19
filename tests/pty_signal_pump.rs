@@ -144,16 +144,34 @@ async fn multiple_subscribers_receive_output() {
     let mut rx1 = pump.subscribe_output();
     let mut rx2 = pump.subscribe_output();
 
-    let line1 = tokio::time::timeout(
+    let chunk1 = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         rx1.recv(),
     ).await.unwrap().unwrap();
 
-    let line2 = tokio::time::timeout(
+    let chunk2 = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         rx2.recv(),
     ).await.unwrap().unwrap();
 
-    assert!(line1.contains("hello world"));
-    assert_eq!(line1, line2);
+    let s1 = String::from_utf8_lossy(&chunk1);
+    assert!(s1.contains("hello world"), "expected output to contain 'hello world', got {s1:?}");
+    assert_eq!(chunk1, chunk2);
+}
+
+#[tokio::test]
+async fn resize_after_spawn_is_accepted() {
+    // Sanity check that the pty master resize call round-trips through
+    // portable_pty without error. We don't (can't easily) verify the
+    // child observed SIGWINCH here — that's an OS behavior, not our logic.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let handle = PtyHandle::spawn(PtyOpts {
+        cwd: tmp.path().to_path_buf(),
+        command: "/bin/sh".into(),
+        args: vec!["-c".into(), "sleep 1".into()],
+        env: vec![],
+    }).unwrap();
+
+    handle.resize(200, 60).expect("initial resize");
+    handle.resize(80, 24).expect("resize to smaller");
 }

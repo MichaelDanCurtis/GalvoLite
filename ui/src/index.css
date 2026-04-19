@@ -1,3 +1,15 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* xterm DOM renderer measures cell width via a probe span inside .xterm-screen.
+   That element inherits Tailwind's body sans-serif (16px) by default, so the
+   measured cell is sized for sans-serif while glyphs render in JetBrains Mono —
+   producing squished block chars and misaligned pixel art. Force the monospace
+   stack on the xterm container so probe and glyphs measure the same. */
+.xterm,
+.xterm-screen,
+.xterm-helper-textarea {
+  font-family: "JetBrains Mono", Menlo, "SF Mono", ui-monospace, monospace;
+  font-size: 13px;
+}

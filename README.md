@@ -6,6 +6,8 @@ Solo continuity engine for Claude Code. See `docs/superpowers/specs/2026-04-15-g
 
 - **Plan 1a** (Ritual Engine CLI): DONE — 44 tests, clippy clean
 - **Plan 1b** (Tauri Desktop Shell + Dashboard): DONE
+- **Plan 2** (Dashboard CRUD Parity): DONE — every API action reachable from the GUI
+- **Plan 3** (Cross-surface fixes + role-as-state): DONE — folder picker works in both surfaces, roles are live session state, expanded terminal is interactive
 
 ## Quick start
 
@@ -46,6 +48,22 @@ cargo run -- --data-dir /tmp/gl status <SESSION-UUID>
 ```
 
 `send`/`handoff`/`kill` work only in-process (they delegate to an in-memory `SessionManager`). For cross-process control use the HTTP API exposed by `serve`.
+
+### Plan 2 additions
+
+- Every API action is accessible from the dashboard. Add/Remove projects, Start sessions, Send text, Handoff, End session, and Autopilot toggle all live in modals reachable within two clicks. The CLI remains available as a debugging/scripting escape hatch.
+- Click any session preview on the dashboard to open a near-fullscreen focused view with a collapsible action rail (ESC or backdrop click collapses).
+- New endpoints:
+  - `DELETE /api/projects/:id` — cascade-deletes the project, its sessions, cycles, and signals. The directory on disk is not touched.
+  - `PUT /api/sessions/:id/autopilot` — toggles the `autopilot` flag on a session. State-only in Plan 2; Plan 3 wires behavior.
+
+### Plan 3 additions
+
+- Folder picker works in both the Tauri desktop app (native dialog) and the browser (server-driven directory browser at `GET /api/fs/list`). Identical functionality on both surfaces — important for forthcoming Tailscale-exposed remote access.
+- Roles (orchestrator / brainstorm / implementation / scout) are now session state, not start-time configuration. Sessions can transition by emitting the `[ROLE:SET role="..."]` signal; the dashboard updates the role badge live.
+- The expanded session view is interactive: click into the terminal and type. Toggling Autopilot disables input (read-only mode).
+- New endpoint: `GET /api/fs/list?path=<absolute>` — returns directory entries for the given absolute path.
+- New signal: `[ROLE:SET role="<name>"]` — see `files/LUCIDITY-CLAUDE-MD-PROFILES.md`. Currently only the `implementation` profile body ships; other roles are accepted as state but use the same body until Plan 5.
 
 ## Architecture
 

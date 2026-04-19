@@ -12,6 +12,7 @@ axum = "0.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "5"
+tauri-plugin-dialog = "2.7.0"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

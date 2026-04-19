@@ -27,6 +27,9 @@ pub enum Error {
     #[error("handoff invalid: {0}")]
     HandoffInvalid(String),
 
+    #[error("project not found: {0}")]
+    ProjectNotFound(uuid::Uuid),
+
     #[error("session not found: {0}")]
     SessionNotFound(uuid::Uuid),
 

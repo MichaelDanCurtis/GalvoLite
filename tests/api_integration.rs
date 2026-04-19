@@ -177,3 +177,145 @@ async fn full_api_lifecycle() {
         resp.status()
     );
 }
+
+#[tokio::test]
+async fn fs_list_returns_dir_entries() {
+    let tmp = tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    std::fs::create_dir(root.join("alpha")).unwrap();
+    std::fs::create_dir(root.join("beta")).unwrap();
+    std::fs::write(root.join("file.txt"), b"x").unwrap();
+
+    let Setup { app, .. } = setup();
+    let path = urlencoding::encode(root.to_str().unwrap());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/fs/list?path={}", path))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["path"], root.to_str().unwrap());
+    let entries = body["entries"].as_array().unwrap();
+    let names: Vec<&str> = entries.iter().map(|e| e["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"alpha"));
+    assert!(names.contains(&"beta"));
+    assert!(names.contains(&"file.txt"));
+    let alpha = entries.iter().find(|e| e["name"] == "alpha").unwrap();
+    assert_eq!(alpha["is_dir"], true);
+    let f = entries.iter().find(|e| e["name"] == "file.txt").unwrap();
+    assert_eq!(f["is_dir"], false);
+}
+
+#[tokio::test]
+async fn fs_list_rejects_relative_path() {
+    let Setup { app, .. } = setup();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/fs/list?path=relative/path")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+/// Bind a real TCP listener and serve the galvolite router on it.
+/// Returns `(bound_addr, Arc<SessionManager>, tempdir_guard)`.
+/// The tempdir guard is returned so the caller can keep it alive.
+async fn spawn_test_server() -> (
+    std::net::SocketAddr,
+    Arc<galvolite::session_manager::SessionManager>,
+    tempfile::TempDir,
+) {
+    use tokio::net::TcpListener;
+
+    let data_dir_tmp = tempfile::tempdir().unwrap();
+    let db = galvolite::db::Db::open(data_dir_tmp.path().join("test.sqlite")).unwrap();
+    let mgr = Arc::new(galvolite::session_manager::SessionManager::new(
+        db,
+        data_dir_tmp.path().to_path_buf(),
+    ));
+    let app = galvolite::api::router(Arc::clone(&mgr));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    (addr, mgr, data_dir_tmp)
+}
+
+#[tokio::test]
+async fn terminal_ws_forwards_input_to_pty() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (addr, mgr, _data_dir) = spawn_test_server().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let project = mgr
+        .add_project(galvolite::db::NewProject {
+            name: "p".into(),
+            path: tmp.path().to_string_lossy().into_owned(),
+            remote_url: None,
+        })
+        .unwrap();
+    let session = mgr
+        .spawn_session(
+            project.id,
+            "echo".into(),
+            "implementation".into(),
+            "cat".into(),
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    let url = format!("ws://{addr}/api/sessions/{}/terminal", session.id);
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+
+    ws.send(Message::Text(
+        r#"{"type":"input","data":"ping\n"}"#.into(),
+    ))
+    .await
+    .unwrap();
+
+    let echoed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            match ws.next().await.unwrap().unwrap() {
+                Message::Binary(b) if b.windows(4).any(|w| w == b"ping") => return b,
+                _ => continue,
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(echoed.windows(4).any(|w| w == b"ping"));
+}
+
+#[tokio::test]
+async fn fs_list_rejects_missing_path() {
+    let Setup { app, .. } = setup();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/fs/list?path=/no/such/dir/anywhere/here")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}

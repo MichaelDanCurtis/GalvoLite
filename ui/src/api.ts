@@ -5,6 +5,7 @@ import type {
   CreateProjectReq,
   CreateSessionReq,
   SendReq,
+  DirectoryListing,
 } from "./types";
 
 const BASE = "";
@@ -21,7 +22,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const text = await resp.text();
     throw new Error(`${resp.status}: ${text}`);
   }
-  return resp.json();
+  if (resp.status === 204) {
+    return undefined as T;
+  }
+  const len = resp.headers.get("content-length");
+  if (len === "0") {
+    return undefined as T;
+  }
+  return resp.json() as Promise<T>;
 }
 
 export const api = {
@@ -61,6 +69,20 @@ export const api = {
 
   getSignals: (id: string) =>
     request<SignalRow[]>(`/api/sessions/${id}/signals`),
+
+  deleteProject: (id: string) =>
+    request<void>(`/api/projects/${id}`, { method: "DELETE" }),
+
+  setAutopilot: (id: string, enabled: boolean) =>
+    request<{ autopilot: boolean }>(`/api/sessions/${id}/autopilot`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
+
+  listDirectory: (path: string) =>
+    request<DirectoryListing>(
+      `/api/fs/list?path=${encodeURIComponent(path)}`,
+    ),
 
   terminalWsUrl: (id: string): string => {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";

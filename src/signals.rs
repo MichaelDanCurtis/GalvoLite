@@ -12,6 +12,7 @@ pub enum Signal {
     HandoffBlocked { reason: String },
     PlanReady,
     SeedNew { id: String },
+    RoleSet { role: String },
 }
 
 impl Signal {
@@ -26,6 +27,7 @@ impl Signal {
             Self::HandoffBlocked { .. } => "HANDOFF:BLOCKED",
             Self::PlanReady => "PLAN:READY",
             Self::SeedNew { .. } => "SEED:NEW",
+            Self::RoleSet { .. } => "ROLE:SET",
         }
     }
 
@@ -35,6 +37,7 @@ impl Signal {
                 Some(reason.clone())
             }
             Self::SeedNew { id } => Some(id.clone()),
+            Self::RoleSet { role } => Some(role.clone()),
             _ => None,
         }
     }
@@ -75,6 +78,10 @@ pub fn parse_signal(line: &str) -> Option<Signal> {
         "SEED:NEW" => {
             let id = extract_quoted(rest, "id")?;
             Some(Signal::SeedNew { id })
+        }
+        "ROLE:SET" => {
+            let role = extract_quoted(rest, "role")?;
+            Some(Signal::RoleSet { role })
         }
         _ => None,
     }
@@ -134,5 +141,28 @@ impl LineBuffer {
 
     pub fn pending(&self) -> &str {
         &self.pending
+    }
+}
+
+#[cfg(test)]
+mod role_signal_tests {
+    use super::*;
+
+    #[test]
+    fn parses_role_set() {
+        let s = parse_signal("[ROLE:SET role=\"brainstorm\"]").unwrap();
+        assert_eq!(s, Signal::RoleSet { role: "brainstorm".into() });
+        assert_eq!(s.kind(), "ROLE:SET");
+        assert_eq!(s.payload().as_deref(), Some("brainstorm"));
+    }
+
+    #[test]
+    fn rejects_role_with_no_value() {
+        assert!(parse_signal("[ROLE:SET]").is_none());
+    }
+
+    #[test]
+    fn rejects_role_with_unknown_key() {
+        assert!(parse_signal("[ROLE:SET name=\"brainstorm\"]").is_none());
     }
 }
