@@ -141,3 +141,120 @@ pub struct EventOutcome {
     /// prior row.
     pub deduped: bool,
 }
+
+/// Single funnel for every state-changing event. Runs in one SQLite
+/// transaction containing `(events row append, sessions row update,
+/// last_event_ts bump)` so the events log is the authoritative pre-image
+/// of every state change.
+///
+/// Returns [`EventOutcome`] describing prev/next state and whether the
+/// call was deduped. Callers must not write `sessions.state` directly;
+/// per spec §8.3 this is the only legal mutation path.
+pub fn apply_event(
+    db: &crate::db::Db,
+    session_id: uuid::Uuid,
+    input: EventInput,
+) -> Result<EventOutcome> {
+    let mut conn = db.pool().get()?;
+    let tx = conn.transaction()?;
+
+    // 1. Read current state (for transition computation).
+    let current_str: String = tx
+        .query_row(
+            "SELECT state FROM sessions WHERE id = ?1",
+            [session_id.to_string()],
+            |r| r.get(0),
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Error::SessionNotFound(session_id),
+            other => Error::Db(other),
+        })?;
+    let current = SessionState::from_str(&current_str)?;
+
+    // 2. Reject transitions out of terminal states.
+    if current.is_terminal() {
+        return Err(Error::Config(format!(
+            "session {session_id} is in terminal state {current}; refusing event {kind:?}",
+            kind = input.kind,
+        )));
+    }
+
+    // 3. Compute next state from (current, kind).
+    let next = transition(current, &input.kind);
+
+    // 4. Append events row (or short-circuit on dedup hit).
+    let payload_str = serde_json::to_string(&input.payload)
+        .map_err(|e| Error::Config(format!("event payload serialize failed: {e}")))?;
+    let (event_id, deduped) = crate::db::Db::append_event_in_tx(
+        &tx,
+        session_id,
+        &input.source.to_string(),
+        &input.kind,
+        &payload_str,
+        Some(&current.to_string()),
+        Some(&next.to_string()),
+        input.dedup_key.as_deref(),
+    )?;
+    if deduped {
+        tx.commit()?;
+        return Ok(EventOutcome {
+            event_id,
+            prev_state: Some(current),
+            next_state: current,
+            deduped: true,
+        });
+    }
+
+    // 5. Update sessions row state + last_event_ts.
+    tx.execute(
+        "UPDATE sessions
+         SET    state         = ?1,
+                last_event_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+         WHERE  id = ?2",
+        rusqlite::params![next.to_string(), session_id.to_string()],
+    )?;
+
+    tx.commit()?;
+    Ok(EventOutcome {
+        event_id,
+        prev_state: Some(current),
+        next_state: next,
+        deduped: false,
+    })
+}
+
+/// Transition table from spec §8.6 plus signal-bridge rows. Anything not
+/// matched here is treated as logging-only (state unchanged).
+fn transition(current: SessionState, kind: &str) -> SessionState {
+    use SessionState::*;
+    match (current, kind) {
+        // Lifecycle (used by SessionManager via Task 7 + Sub-plan 2 hooks).
+        (Starting, "system.session_started") | (Starting, "hook.SessionStart") => Idle,
+        (_,        "system.session_ended")   | (_,        "hook.SessionEnd")   => Ended,
+        (_,        "system.session_orphaned")                                  => Error,
+
+        // Signal bridge (System events emitted by SignalPump in Task 8).
+        (Idle,           "signal.STATUS:WORKING")    => Working,
+        (Working,        "signal.STATUS:WORKING")    => Working,
+        (NeedsAttention, "signal.STATUS:WORKING")    => Working,
+        (AwaitingInput,  "signal.STATUS:WORKING")    => Working,
+        (Starting,       "signal.STATUS:WORKING")    => Working,
+
+        (Working,        "signal.STATUS:COMPLETE")   => Idle,
+        (NeedsAttention, "signal.STATUS:COMPLETE")   => Idle,
+        (AwaitingInput,  "signal.STATUS:COMPLETE")   => Idle,
+
+        (Working,        "signal.ATTENTION:NEEDED")  => NeedsAttention,
+        (Idle,           "signal.ATTENTION:NEEDED")  => NeedsAttention,
+        (AwaitingInput,  "signal.ATTENTION:NEEDED")  => NeedsAttention,
+
+        // Everything else logs but doesn't change state. Includes:
+        //  - signal.HANDOFF:READY / HANDOFF:BLOCKED / PLAN:READY / SEED:NEW /
+        //    ROLE:SET / ATTENTION:CONTEXT — model-side annotations
+        //  - mcp.* tool calls (Sub-plan 3)
+        //  - hook.PreCompact / hook.UserPromptSubmit / hook.Stop /
+        //    hook.PostToolUse / hook.Notification (Sub-plan 2)
+        //  - operator.* (Sub-plan 4)
+        _ => current,
+    }
+}

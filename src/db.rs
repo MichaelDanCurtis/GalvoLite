@@ -588,6 +588,54 @@ impl Db {
         Ok(rows > 0)
     }
 
+    /// Append one row to the `events` log inside a caller-supplied transaction.
+    /// Returns `(rowid, deduped)` where `deduped = true` if `dedup_key` was
+    /// already present (no row was written).
+    ///
+    /// This is the low-level helper. Callers must use [`crate::state::apply_event`]
+    /// for state-changing events so the events row and the sessions update land
+    /// inside the same transaction.
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_event_in_tx(
+        tx: &rusqlite::Transaction<'_>,
+        session_id: Uuid,
+        source: &str,
+        kind: &str,
+        payload_json: &str,
+        prev_state: Option<&str>,
+        next_state: Option<&str>,
+        dedup_key: Option<&str>,
+    ) -> Result<(i64, bool)> {
+        if let Some(key) = dedup_key {
+            use rusqlite::OptionalExtension;
+            let existing: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM events WHERE dedup_key = ?1",
+                    params![key],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(id) = existing {
+                return Ok((id, true));
+            }
+        }
+        tx.execute(
+            "INSERT INTO events
+                (session_id, source, kind, payload_json, prev_state, next_state, dedup_key)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                session_id.to_string(),
+                source,
+                kind,
+                payload_json,
+                prev_state,
+                next_state,
+                dedup_key,
+            ],
+        )?;
+        Ok((tx.last_insert_rowid(), false))
+    }
+
     pub fn record_signal(
         &self,
         session_id: Uuid,
