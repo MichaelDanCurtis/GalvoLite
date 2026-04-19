@@ -1,4 +1,4 @@
-use galvolite::state::SessionState;
+use galvolite::state::{EventInput, EventOutcome, SessionState, Source};
 use std::str::FromStr;
 
 #[test]
@@ -40,4 +40,43 @@ fn is_terminal_returns_true_for_error_and_ended_only() {
     ] {
         assert!(!s.is_terminal(), "{s} must not be terminal");
     }
+}
+
+#[test]
+fn source_round_trip() {
+    for (src, s) in [
+        (Source::Mcp,      "mcp"),
+        (Source::Hook,     "hook"),
+        (Source::Operator, "operator"),
+        (Source::System,   "system"),
+    ] {
+        assert_eq!(src.to_string(), s);
+        assert_eq!(Source::from_str(s).unwrap(), src);
+    }
+}
+
+#[test]
+fn event_input_payload_is_json_value() {
+    let e = EventInput {
+        source: Source::System,
+        kind: "signal.STATUS:WORKING".into(),
+        payload: serde_json::json!({ "raw": "[STATUS:WORKING]" }),
+        dedup_key: Some("sig-1".into()),
+    };
+    assert_eq!(e.kind, "signal.STATUS:WORKING");
+    assert_eq!(e.payload["raw"], "[STATUS:WORKING]");
+}
+
+#[test]
+fn event_outcome_carries_event_id_and_states() {
+    let o = EventOutcome {
+        event_id: 42,
+        prev_state: Some(SessionState::Working),
+        next_state: SessionState::Idle,
+        deduped: false,
+    };
+    assert_eq!(o.event_id, 42);
+    assert_eq!(o.prev_state, Some(SessionState::Working));
+    assert_eq!(o.next_state, SessionState::Idle);
+    assert!(!o.deduped);
 }

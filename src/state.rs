@@ -69,3 +69,75 @@ impl FromStr for SessionState {
         })
     }
 }
+
+/// Origin of a state-changing event. Stored verbatim in `events.source`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Source {
+    /// Triggered by a model-chosen MCP tool call.
+    Mcp,
+    /// Fired by Claude Code via `/hooks/ingest`.
+    Hook,
+    /// Triggered by a dashboard / CLI action.
+    Operator,
+    /// Synthesized by GalvoLite itself (orphan reconciler, signal bridge,
+    /// startup recovery markers).
+    System,
+}
+
+impl fmt::Display for Source {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Mcp      => "mcp",
+            Self::Hook     => "hook",
+            Self::Operator => "operator",
+            Self::System   => "system",
+        })
+    }
+}
+
+impl FromStr for Source {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self> {
+        Ok(match s {
+            "mcp"      => Self::Mcp,
+            "hook"     => Self::Hook,
+            "operator" => Self::Operator,
+            "system"   => Self::System,
+            other => return Err(Error::Config(format!("unknown event source: {other}"))),
+        })
+    }
+}
+
+/// Input to [`apply_event`]. The funnel writes one `events` row per call
+/// (skipped if `dedup_key` already exists).
+#[derive(Debug, Clone)]
+pub struct EventInput {
+    pub source: Source,
+    /// Free-form event kind, e.g. `"hook.SessionStart"`, `"mcp.set_role"`,
+    /// `"signal.STATUS:WORKING"`, `"system.recovered"`. The convention is
+    /// `"<source>.<name>"` but the funnel does not enforce it — kind is
+    /// the dimension `read_events`/dashboard filters on, so use whatever
+    /// the consumer expects.
+    pub kind: String,
+    pub payload: serde_json::Value,
+    /// Optional UNIQUE key. If present and a prior row carries the same
+    /// value, the funnel returns `deduped = true` without writing.
+    pub dedup_key: Option<String>,
+}
+
+/// Result of a successful `apply_event` call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventOutcome {
+    /// Rowid of the new `events` row, or the existing row if `deduped`.
+    pub event_id: i64,
+    /// State the session was in immediately before the event landed
+    /// (`None` if this is the first event for a brand-new row).
+    pub prev_state: Option<SessionState>,
+    /// State the session is in after the event was applied. Equals
+    /// `prev_state` for events that don't change state (logging-only).
+    pub next_state: SessionState,
+    /// `true` if the event was a no-op because `dedup_key` matched a
+    /// prior row.
+    pub deduped: bool,
+}
