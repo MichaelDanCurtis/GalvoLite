@@ -10,6 +10,14 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 const SCHEMA_V1: &str = include_str!("../migrations/0001_initial.sql");
+const SCHEMA_V2: &str = include_str!("../migrations/0002_hooks_mcp_foundations.sql");
+
+/// (version, sql_body). Order matters: applied lowest-to-highest. Each entry
+/// is applied iff the version is not present in `schema_version`.
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, SCHEMA_V1),
+    (2, SCHEMA_V2),
+];
 
 #[derive(Clone)]
 pub struct Db {
@@ -42,26 +50,36 @@ impl Db {
 
     fn migrate(&self) -> Result<()> {
         let mut conn = self.pool.get()?;
-        let tx = conn.transaction()?;
 
-        tx.execute_batch(SCHEMA_V1)?;
+        // Bootstrap: schema_version itself is created by 0001_initial.sql, so the
+        // very first call needs to run that file unconditionally before we can
+        // query for applied versions.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                 version    INTEGER NOT NULL PRIMARY KEY,
+                 applied_at TEXT NOT NULL
+             );",
+        )?;
 
-        let already_applied: Option<i64> = tx
-            .query_row(
-                "SELECT version FROM schema_version WHERE version = 1",
-                [],
-                |r| r.get(0),
-            )
-            .ok();
-
-        if already_applied.is_none() {
+        for (version, body) in MIGRATIONS {
+            let already: Option<i64> = conn
+                .query_row(
+                    "SELECT version FROM schema_version WHERE version = ?1",
+                    params![*version],
+                    |r| r.get(0),
+                )
+                .ok();
+            if already.is_some() {
+                continue;
+            }
+            let tx = conn.transaction()?;
+            tx.execute_batch(body)?;
             tx.execute(
                 "INSERT INTO schema_version (version, applied_at) VALUES (?1, ?2)",
-                params![1i64, Utc::now().to_rfc3339()],
+                params![*version, Utc::now().to_rfc3339()],
             )?;
+            tx.commit()?;
         }
-
-        tx.commit()?;
         Ok(())
     }
 }
