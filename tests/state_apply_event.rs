@@ -24,19 +24,6 @@ fn open_db_with_session() -> (Db, TempDir, uuid::Uuid) {
         })
         .unwrap();
 
-    // insert_session writes the legacy v1 state string ("spawning"); the
-    // hooks+MCP funnel uses the v2 state enum from `state::SessionState`.
-    // Realign the freshly-inserted row to the v2 default ("starting") so
-    // apply_event can read it back.
-    {
-        let conn = db.pool().get().unwrap();
-        conn.execute(
-            "UPDATE sessions SET state = 'starting' WHERE id = ?1",
-            [s.id.to_string()],
-        )
-        .unwrap();
-    }
-
     (db, tmp, s.id)
 }
 

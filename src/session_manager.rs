@@ -220,7 +220,7 @@ impl SessionManager {
                     .map(|p| p.to_string_lossy().into_owned());
                 let _ = mgr.db.end_cycle_if_unended(prev, handoff_path.as_deref());
             }
-            let _ = mgr.db.end_session_if_unended(session_id, SessionState::Complete);
+            let _ = mgr.db.end_session_if_unended(session_id, SessionState::Ended);
             let mut running = mgr.running.lock().unwrap();
             running.remove(&session_id);
         });
@@ -334,7 +334,7 @@ impl SessionManager {
         }
         // Conditional write: if the session already ended naturally
         // (e.g. Complete), we must not clobber that terminal state.
-        let killed = self.db.end_session_if_unended(id, SessionState::Killed)?;
+        let killed = self.db.end_session_if_unended(id, SessionState::Ended)?;
         if !was_running && !killed {
             // Not in the running map, and the DB says it was already ended.
             // Report this rather than silently succeeding.

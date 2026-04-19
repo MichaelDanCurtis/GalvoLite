@@ -3,11 +3,12 @@ use chrono::{DateTime, Utc};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
-use serde::{Deserialize, Serialize};
-use std::fmt;
+use serde::Serialize;
 use std::path::Path;
 use std::str::FromStr;
 use uuid::Uuid;
+
+pub use crate::state::SessionState;
 
 const SCHEMA_V1: &str = include_str!("../migrations/0001_initial.sql");
 const SCHEMA_V2: &str = include_str!("../migrations/0002_hooks_mcp_foundations.sql");
@@ -124,52 +125,6 @@ pub struct NewProject {
     pub name: String,
     pub path: String,
     pub remote_url: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionState {
-    Spawning,
-    Working,
-    AttentionNeeded,
-    HandingOff,
-    Restoring,
-    Complete,
-    Killed,
-    Error,
-}
-
-impl fmt::Display for SessionState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Self::Spawning => "spawning",
-            Self::Working => "working",
-            Self::AttentionNeeded => "attention_needed",
-            Self::HandingOff => "handing_off",
-            Self::Restoring => "restoring",
-            Self::Complete => "complete",
-            Self::Killed => "killed",
-            Self::Error => "error",
-        };
-        f.write_str(s)
-    }
-}
-
-impl FromStr for SessionState {
-    type Err = Error;
-    fn from_str(s: &str) -> Result<Self> {
-        Ok(match s {
-            "spawning" => Self::Spawning,
-            "working" => Self::Working,
-            "attention_needed" => Self::AttentionNeeded,
-            "handing_off" => Self::HandingOff,
-            "restoring" => Self::Restoring,
-            "complete" => Self::Complete,
-            "killed" => Self::Killed,
-            "error" => Self::Error,
-            other => return Err(Error::Config(format!("unknown session state: {other}"))),
-        })
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -318,7 +273,7 @@ impl Db {
     pub fn insert_session(&self, new: NewSession) -> Result<Session> {
         let id = Uuid::new_v4();
         let now = Utc::now();
-        let state = SessionState::Spawning;
+        let state = SessionState::Starting;
         let conn = self.pool.get()?;
         conn.execute(
             "INSERT INTO sessions
