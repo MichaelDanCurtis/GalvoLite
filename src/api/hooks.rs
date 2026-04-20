@@ -53,10 +53,13 @@ pub async fn ingest(
     // Compute event kind.
     let kind = req.hook.as_event_kind();
 
+    let bus = mgr.event_bus();
+
     // Apply through the state funnel.
-    let _outcome = state::apply_event(
+    let _outcome = state::apply_event_with_bus(
         db,
         session_id,
+        bus,
         EventInput {
             source: Source::Hook,
             kind,
@@ -83,15 +86,15 @@ pub async fn ingest(
     let inject = match req.hook {
         HookKind::SessionStart => lifecycle::on_session_start(db, session_id, &req.payload),
         HookKind::SessionEnd => {
-            lifecycle::on_session_end(db, session_id, &req.payload);
+            lifecycle::on_session_end(db, session_id, &req.payload, bus);
             None
         }
         HookKind::UserPromptSubmit => {
             turn::on_user_prompt_submit(db, session_id, &req.payload)
         }
-        HookKind::Stop => turn::on_stop(db, session_id),
+        HookKind::Stop => turn::on_stop(db, session_id, bus),
         HookKind::PreCompact => turn::on_pre_compact(db, session_id),
-        HookKind::PostToolUse => observe::on_post_tool_use(db, session_id, &req.payload),
+        HookKind::PostToolUse => observe::on_post_tool_use(db, session_id, &req.payload, bus),
         HookKind::Notification => observe::on_notification(db, session_id, &req.payload),
     };
 

@@ -60,3 +60,46 @@ async fn session_manager_exposes_event_broadcaster() {
     let evt = rx.recv().await.unwrap();
     assert!(matches!(evt, galvolite::api::events::DomainEvent::OperatorToast { .. }));
 }
+
+#[tokio::test]
+async fn apply_event_publishes_state_changed_and_event_appended() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = galvolite::db::Db::open(dir.path().join("t.sqlite")).unwrap();
+    let bus = galvolite::api::events::EventBroadcaster::new(64);
+    let mgr = std::sync::Arc::new(galvolite::session_manager::SessionManager::with_event_bus(
+        db.clone(), dir.path().to_path_buf(), bus.clone(),
+    ));
+
+    let proj = db.insert_project(galvolite::db::NewProject {
+        name: "p".into(),
+        path: dir.path().to_string_lossy().into(),
+        remote_url: None,
+    }).unwrap();
+    let s = db.insert_session(galvolite::db::NewSession {
+        project_id: proj.id, role: "implementation".into(),
+        branch: None, worktree_path: dir.path().to_string_lossy().into(),
+        task_summary: "t".into(), parent_session_id: None,
+    }).unwrap();
+    db.pool().get().unwrap().execute(
+        "UPDATE sessions SET state = 'idle' WHERE id = ?1",
+        rusqlite::params![s.id.to_string()],
+    ).unwrap();
+
+    let mut rx = mgr.subscribe_events();
+    galvolite::state::apply_event_with_bus(
+        &db, s.id, mgr.event_bus(),
+        galvolite::state::EventInput {
+            source: galvolite::state::Source::Hook,
+            kind: "hook.UserPromptSubmit".into(),
+            payload: serde_json::json!({}),
+            dedup_key: None,
+        },
+    ).unwrap();
+
+    let first = rx.recv().await.unwrap();
+    let second = rx.recv().await.unwrap();
+    assert!(matches!(first, galvolite::api::events::DomainEvent::SessionEventAppended { .. }));
+    assert!(matches!(second, galvolite::api::events::DomainEvent::SessionStateChanged {
+        next: galvolite::state::SessionState::Working, ..
+    }));
+}

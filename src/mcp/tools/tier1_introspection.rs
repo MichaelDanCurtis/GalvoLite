@@ -245,9 +245,10 @@ async fn pause_self(ctx: ToolCtx, args: Value) -> ToolOutcome {
         Ok(p) => p,
         Err(e) => return ToolOutcome::InvalidParams(e.to_string()),
     };
-    match state::apply_event(
+    match state::apply_event_with_bus(
         ctx.mgr.db(),
         ctx.session_id,
+        ctx.mgr.event_bus(),
         EventInput {
             source: Source::Mcp,
             kind: "mcp.pause_self".into(),
@@ -274,9 +275,10 @@ async fn request_end(ctx: ToolCtx, args: Value) -> ToolOutcome {
         Ok(p) => p,
         Err(e) => return ToolOutcome::InvalidParams(e.to_string()),
     };
-    match state::apply_event(
+    match state::apply_event_with_bus(
         ctx.mgr.db(),
         ctx.session_id,
+        ctx.mgr.event_bus(),
         EventInput {
             source: Source::Mcp,
             kind: "mcp.request_end".into(),

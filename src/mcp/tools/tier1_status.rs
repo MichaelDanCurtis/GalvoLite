@@ -103,9 +103,10 @@ async fn status_report(ctx: ToolCtx, args: Value) -> ToolOutcome {
         return ToolOutcome::InvalidParams(format!("unknown kind: {}", parsed.kind));
     }
     let payload = json!({ "kind": parsed.kind, "note": parsed.note });
-    match state::apply_event(
+    match state::apply_event_with_bus(
         ctx.mgr.db(),
         ctx.session_id,
+        ctx.mgr.event_bus(),
         EventInput {
             source: Source::Mcp,
             kind: "mcp.status_report".into(),
@@ -132,9 +133,10 @@ async fn request_attention(ctx: ToolCtx, args: Value) -> ToolOutcome {
         Ok(p) => p,
         Err(e) => return ToolOutcome::InvalidParams(e.to_string()),
     };
-    match state::apply_event(
+    match state::apply_event_with_bus(
         ctx.mgr.db(),
         ctx.session_id,
+        ctx.mgr.event_bus(),
         EventInput {
             source: Source::Mcp,
             kind: "mcp.request_attention".into(),
@@ -161,9 +163,10 @@ async fn set_plan(ctx: ToolCtx, args: Value) -> ToolOutcome {
         Ok(p) => p,
         Err(e) => return ToolOutcome::InvalidParams(e.to_string()),
     };
-    match state::apply_event(
+    match state::apply_event_with_bus(
         ctx.mgr.db(),
         ctx.session_id,
+        ctx.mgr.event_bus(),
         EventInput {
             source: Source::Mcp,
             kind: "mcp.set_plan".into(),
@@ -202,9 +205,10 @@ async fn plan_check_step(ctx: ToolCtx, args: Value) -> ToolOutcome {
     ) {
         return ToolOutcome::InvalidParams(format!("unknown status: {}", parsed.status));
     }
-    match state::apply_event(
+    match state::apply_event_with_bus(
         ctx.mgr.db(),
         ctx.session_id,
+        ctx.mgr.event_bus(),
         EventInput {
             source: Source::Mcp,
             kind: "mcp.plan_check_step".into(),
@@ -236,9 +240,10 @@ async fn set_seed(ctx: ToolCtx, args: Value) -> ToolOutcome {
         Ok(p) => p,
         Err(e) => return ToolOutcome::InvalidParams(e.to_string()),
     };
-    match state::apply_event(
+    match state::apply_event_with_bus(
         ctx.mgr.db(),
         ctx.session_id,
+        ctx.mgr.event_bus(),
         EventInput {
             source: Source::Mcp,
             kind: "mcp.set_seed".into(),

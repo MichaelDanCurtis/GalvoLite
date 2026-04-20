@@ -187,9 +187,10 @@ impl SessionManager {
 
         let fx = Arc::new(PtySideEffects::new(handle.clone()));
         let driver = Arc::new(RitualDriver::new(fx));
-        let started = crate::state::apply_event(
+        let started = crate::state::apply_event_with_bus(
             &self.db,
             session.id,
+            &self.event_bus,
             crate::state::EventInput {
                 source: crate::state::Source::System,
                 kind: "system.session_started".into(),
@@ -272,9 +273,10 @@ impl SessionManager {
                     .map(|p| p.to_string_lossy().into_owned());
                 let _ = mgr.db.end_cycle_if_unended(prev, handoff_path.as_deref());
             }
-            let _ = crate::state::apply_event(
+            let _ = crate::state::apply_event_with_bus(
                 &mgr.db,
                 session_id,
+                &mgr.event_bus,
                 crate::state::EventInput {
                     source: crate::state::Source::System,
                     kind: "system.session_ended".into(),
@@ -402,9 +404,10 @@ impl SessionManager {
         // pty_exit path; one wins, one no-ops. Terminal-state guard inside
         // apply_event also returns Err if already Ended — treat as "not
         // killed by us" rather than bubbling.
-        let killed = crate::state::apply_event(
+        let killed = crate::state::apply_event_with_bus(
             &self.db,
             id,
+            &self.event_bus,
             crate::state::EventInput {
                 source: crate::state::Source::Operator,
                 kind: "system.session_ended".into(),
@@ -571,6 +574,11 @@ fn orphan_session(db: &Db, session_id: Uuid, reason: &'static str) {
             dedup_key: Some(format!("session-orphaned:{session_id}")),
         },
     );
+    // Note: orphan_session is called from spawn_session error paths where we
+    // don't have a reference to the event_bus; the apply_event call above
+    // handles DB state. The bus publish is intentionally omitted here — the
+    // SessionManager callers that have bus access use apply_event_with_bus
+    // directly. This helper is kept as bare apply_event per Task 3 design.
 }
 
 /// Validate and canonicalize a project path.

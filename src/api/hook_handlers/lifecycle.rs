@@ -78,7 +78,12 @@ fn last_handoff_summary(db: &Db, session_id: Uuid) -> Option<String> {
         })
 }
 
-pub fn on_session_end(db: &Db, session_id: Uuid, payload: &serde_json::Value) {
+pub fn on_session_end(
+    db: &Db,
+    session_id: Uuid,
+    payload: &serde_json::Value,
+    bus: &crate::api::events::EventBroadcaster,
+) {
     let exit_code = payload
         .get("exit_code")
         .and_then(|v| v.as_i64())
@@ -93,9 +98,10 @@ pub fn on_session_end(db: &Db, session_id: Uuid, payload: &serde_json::Value) {
     } else {
         "system.session_errored"
     };
-    let _ = crate::state::apply_event(
+    let _ = crate::state::apply_event_with_bus(
         db,
         session_id,
+        bus,
         crate::state::EventInput {
             source: crate::state::Source::System,
             kind: kind.into(),

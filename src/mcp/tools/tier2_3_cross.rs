@@ -226,9 +226,10 @@ async fn send_to_session(ctx: ToolCtx, args: Value) -> ToolOutcome {
     // Write event row against the TARGET session so it shows up in the
     // receiver's event log. Best-effort: if the target row is gone we still
     // attempt the PTY write below (which will then return SessionNotFound).
-    let _ = state::apply_event(
+    let _ = state::apply_event_with_bus(
         ctx.mgr.db(),
         target,
+        ctx.mgr.event_bus(),
         EventInput {
             source: Source::Mcp,
             kind: "mcp.send_to_session".into(),
@@ -280,9 +281,10 @@ async fn ask_operator(ctx: ToolCtx, args: Value) -> ToolOutcome {
         Err(e) => return ToolOutcome::InvalidParams(e.to_string()),
     };
 
-    let _ = state::apply_event(
+    let _ = state::apply_event_with_bus(
         ctx.mgr.db(),
         ctx.session_id,
+        ctx.mgr.event_bus(),
         EventInput {
             source: Source::Mcp,
             kind: "mcp.ask_operator".into(),
@@ -329,9 +331,10 @@ async fn notify_operator(ctx: ToolCtx, args: Value) -> ToolOutcome {
         return ToolOutcome::InvalidParams(format!("unknown level: {}", parsed.level));
     }
 
-    let _ = state::apply_event(
+    let _ = state::apply_event_with_bus(
         ctx.mgr.db(),
         ctx.session_id,
+        ctx.mgr.event_bus(),
         EventInput {
             source: Source::Mcp,
             kind: "mcp.notify_operator".into(),

@@ -13,16 +13,22 @@
 use crate::db::Db;
 use uuid::Uuid;
 
-pub fn on_post_tool_use(db: &Db, session_id: Uuid, payload: &serde_json::Value) -> Option<String> {
+pub fn on_post_tool_use(
+    db: &Db,
+    session_id: Uuid,
+    payload: &serde_json::Value,
+    bus: &crate::api::events::EventBroadcaster,
+) -> Option<String> {
     let cmd = payload
         .get("command")
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
     if cmd.starts_with("git push") {
-        let _ = crate::state::apply_event(
+        let _ = crate::state::apply_event_with_bus(
             db,
             session_id,
+            bus,
             crate::state::EventInput {
                 source: crate::state::Source::System,
                 kind: "system.attention_needed".into(),

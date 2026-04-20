@@ -365,6 +365,10 @@ impl SignalPump {
 
                     // New funnel path. Source::System because the legacy parser
                     // is an internal bridge, not a model-chosen MCP tool.
+                    // TODO(sub-plan-5): migrate to apply_event_with_bus once the
+                    // SignalPump has access to an EventBroadcaster. The signal
+                    // pipeline is replaced wholesale in Sub-plan 5, so plumbing
+                    // the bus here now would be wasted churn.
                     let _ = crate::state::apply_event(
                         &db,
                         session_id,

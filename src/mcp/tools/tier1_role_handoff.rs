@@ -89,9 +89,10 @@ async fn set_role(ctx: ToolCtx, args: Value) -> ToolOutcome {
     }
 
     // 1. Event + sessions.role update atomically (state::apply_column_side_effects).
-    if let Err(e) = state::apply_event(
+    if let Err(e) = state::apply_event_with_bus(
         ctx.mgr.db(),
         ctx.session_id,
+        ctx.mgr.event_bus(),
         EventInput {
             source: Source::Mcp,
             kind: "mcp.set_role".into(),
@@ -161,9 +162,10 @@ async fn write_handoff(ctx: ToolCtx, args: Value) -> ToolOutcome {
 
     // Event + sessions.handoff_path update atomically.
     let path_str = path.to_string_lossy().into_owned();
-    if let Err(e) = state::apply_event(
+    if let Err(e) = state::apply_event_with_bus(
         ctx.mgr.db(),
         ctx.session_id,
+        ctx.mgr.event_bus(),
         EventInput {
             source: Source::Mcp,
             kind: "mcp.write_handoff".into(),
@@ -192,9 +194,10 @@ async fn read_handoff(ctx: ToolCtx, args: Value) -> ToolOutcome {
     };
 
     // Logging-only event row (no state change).
-    let _ = state::apply_event(
+    let _ = state::apply_event_with_bus(
         ctx.mgr.db(),
         ctx.session_id,
+        ctx.mgr.event_bus(),
         EventInput {
             source: Source::Mcp,
             kind: "mcp.read_handoff".into(),
