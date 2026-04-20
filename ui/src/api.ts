@@ -2,6 +2,8 @@ import type {
   Project,
   Session,
   SignalRow,
+  EventRow,
+  PlanStep,
   CreateProjectReq,
   CreateSessionReq,
   SendReq,
@@ -70,6 +72,13 @@ export const api = {
   getSignals: (id: string) =>
     request<SignalRow[]>(`/api/sessions/${id}/signals`),
 
+  getSessionEvents: (id: string, limit: number = 100) =>
+    request<EventRow[]>(`/api/sessions/${id}/events?limit=${limit}`),
+
+  // No limit/cursor — plan_steps per session is bounded (~dozens at most).
+  getSessionPlanSteps: (id: string) =>
+    request<PlanStep[]>(`/api/sessions/${id}/plan_steps`),
+
   deleteProject: (id: string) =>
     request<void>(`/api/projects/${id}`, { method: "DELETE" }),
 
@@ -83,6 +92,12 @@ export const api = {
     request<DirectoryListing>(
       `/api/fs/list?path=${encodeURIComponent(path)}`,
     ),
+
+  answerOperatorPrompt: (promptId: string, answer: string) =>
+    request<void>(`/operator/prompt/${encodeURIComponent(promptId)}/answer`, {
+      method: "POST",
+      body: JSON.stringify({ answer }),
+    }),
 
   terminalWsUrl: (id: string): string => {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";

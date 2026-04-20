@@ -3,8 +3,10 @@
 //! Builds a Router that the CLI `serve` command and the Tauri binary both use.
 //! All business logic is delegated to SessionManager.
 
+pub mod events;
 pub mod hook_handlers;
 pub mod hooks;
+pub mod operator;
 
 use crate::session_manager::SessionManager;
 use axum::extract::{Path, State};
@@ -28,9 +30,12 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route("/api/sessions/:id/send", post(send_to_session))
         .route("/api/sessions/:id/autopilot", put(set_autopilot))
         .route("/api/sessions/:id/signals", get(get_signals))
+        .route("/api/sessions/:id/events", get(get_events))
+        .route("/api/sessions/:id/plan_steps", get(get_plan_steps))
         .route("/api/sessions/:id/terminal", get(terminal_ws))
         .route("/api/fs/list", get(list_directory))
         .route("/hooks/ingest", post(hooks::ingest))
+        .route("/operator/prompt/:id/answer", post(operator::answer))
         .route("/mcp", post(crate::mcp::transport::handle))
         .layer(CorsLayer::permissive())
         .with_state(mgr);
@@ -242,6 +247,54 @@ async fn get_signals(
     }
 }
 
+#[derive(Deserialize)]
+struct EventsQuery {
+    limit: Option<i64>,
+}
+
+/// Default page size for the Events feed when `?limit=` is omitted.
+const EVENTS_DEFAULT_LIMIT: i64 = 100;
+/// Hard cap; any larger value is clamped silently.
+const EVENTS_MAX_LIMIT: i64 = 500;
+
+/// `GET /api/sessions/:id/events?limit=N` — reverse-chronological events feed
+/// for the dashboard's Events tab. Rows are shaped identically to the MCP
+/// `read_events` response (id, ts, source, kind, payload, prev_state,
+/// next_state) so `EventRow` is reusable. See [`crate::db::Db::read_recent_events`].
+async fn get_events(
+    State(mgr): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    axum::extract::Query(q): axum::extract::Query<EventsQuery>,
+) -> Response {
+    let raw = q.limit.unwrap_or(EVENTS_DEFAULT_LIMIT);
+    // Clamp: reject nonsense (<=0) → default; cap enormous values.
+    let limit = if raw <= 0 {
+        EVENTS_DEFAULT_LIMIT
+    } else {
+        raw.min(EVENTS_MAX_LIMIT)
+    };
+    match mgr.db().read_recent_events(id, limit) {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => err_to_response(e),
+    }
+}
+
+/// `GET /api/sessions/:id/plan_steps` — structured plan steps for the
+/// dashboard's Plan tab, ordered by ordinal ASC. Row shape: `{ hash, text,
+/// status, note }` matching the UI `PlanStep` type. Status `in_progress` is
+/// rewritten to `working` by the DB helper so the wire shape is UI-native.
+///
+/// No pagination: plan_steps per session is small by design (dozens at most).
+async fn get_plan_steps(
+    State(mgr): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Response {
+    match mgr.db().read_plan_steps(id) {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => err_to_response(e),
+    }
+}
+
 // --- WebSocket ---
 
 async fn terminal_ws(
@@ -277,7 +330,18 @@ async fn handle_terminal_ws(
     use axum::extract::ws::Message;
     use futures_util::{sink::SinkExt, stream::StreamExt};
 
-    let (mut sink, mut stream) = socket.split();
+    let (sink, mut stream) = socket.split();
+    // The sink is shared between the PTY-bytes writer task and the
+    // domain-event forwarder task: both can emit frames asynchronously,
+    // so the writer half lives behind an Arc<Mutex<_>>. Each send takes
+    // the lock briefly; contention is negligible because both producers
+    // are bursty.
+    //
+    // TODO(plan-4 follow-up): Sink mutex is held across send().await in both
+    // the writer and event_forwarder branches. Under client backpressure this
+    // serializes both producers and risks broadcast lag. Consider moving to a
+    // single writer task draining an mpsc<Message> funnel.
+    let sink = std::sync::Arc::new(tokio::sync::Mutex::new(sink));
 
     // Side channel: reader → writer, used to deliver fresh server-side
     // screen snapshots taken AFTER each client-driven resize. We do NOT
@@ -292,20 +356,23 @@ async fn handle_terminal_ws(
     // so the client always lands on a coherent repaint.
     let (snap_tx, mut snap_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
 
+    let sink_for_writer = sink.clone();
     let writer = async move {
         loop {
             tokio::select! {
                 biased;
                 snap = snap_rx.recv() => {
                     let Some(bytes) = snap else { break };
-                    if sink.send(Message::Binary(bytes)).await.is_err() {
+                    let mut s = sink_for_writer.lock().await;
+                    if s.send(Message::Binary(bytes)).await.is_err() {
                         break;
                     }
                 }
                 msg = rx.recv() => {
                     match msg {
                         Ok(bytes) => {
-                            if sink.send(Message::Binary(bytes)).await.is_err() {
+                            let mut s = sink_for_writer.lock().await;
+                            if s.send(Message::Binary(bytes)).await.is_err() {
                                 break;
                             }
                         }
@@ -345,9 +412,45 @@ async fn handle_terminal_ws(
         }
     };
 
+    // Domain-event forwarder: subscribe to the per-process event bus,
+    // filter to events scoped to this session, serialize each as JSON,
+    // and emit on the shared sink as a `Message::Text` frame. PTY bytes
+    // (binary) and domain events (text) thus share one socket.
+    let mut event_rx = mgr.subscribe_events();
+    let sink_for_events = sink.clone();
+    let event_forwarder = async move {
+        loop {
+            match event_rx.recv().await {
+                Ok(evt) => {
+                    if !evt.applies_to(session_id) {
+                        continue;
+                    }
+                    let json = match serde_json::to_string(&evt) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "domain event serialization failed; dropping frame");
+                            continue;
+                        }
+                    };
+                    let mut s = sink_for_events.lock().await;
+                    if s.send(Message::Text(json)).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+
+    // When any of the three tasks ends (writer drained, reader observed
+    // close, or event channel dropped), the others are dropped as well —
+    // `tokio::select!` cancels the losing futures, releasing the sink
+    // and the broadcast receivers. No background task leaks per WS.
     tokio::select! {
         _ = writer => {},
         _ = reader => {},
+        _ = event_forwarder => {},
     }
 }
 

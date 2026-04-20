@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Send, ArrowLeftRight, Zap, Power, ChevronLeft, ChevronRight } from "lucide-react";
+import { Send, ArrowLeftRight, Zap, Power, ScrollText, ChevronLeft, ChevronRight } from "lucide-react";
 
 interface Props {
   autopilot: boolean;
@@ -7,6 +7,7 @@ interface Props {
   onHandoff: (origin: DOMRect) => void;
   onToggleAutopilot: (next: boolean) => void;
   onEnd: (origin: DOMRect) => void;
+  onOpenEvents: () => void;
 }
 
 export function SessionRail({
@@ -15,6 +16,7 @@ export function SessionRail({
   onHandoff,
   onToggleAutopilot,
   onEnd,
+  onOpenEvents,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
 
@@ -66,6 +68,14 @@ export function SessionRail({
       >
         <Power size={16} />
         {expanded && <span>End session</span>}
+      </button>
+      <button
+        className={iconBtn}
+        aria-label="Event log"
+        onClick={onOpenEvents}
+      >
+        <ScrollText size={16} />
+        {expanded && <span>Event log</span>}
       </button>
       <div className="flex-1" />
       <button

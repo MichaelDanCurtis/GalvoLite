@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Plus, PlayCircle } from "lucide-react";
 import { useProjects } from "../hooks/useProjects";
 import { useSessions } from "../hooks/useSessions";
 import { useExpandedSession } from "../hooks/useExpandedSession";
+import { useSessionEvents } from "../hooks/useSessionEvents";
 import { ProjectSelector } from "./ProjectSelector";
 import { SessionRow } from "./SessionRow";
 import { ExpandedSessionView } from "./ExpandedSessionView";
@@ -12,25 +13,49 @@ import { StartSessionModal } from "./modals/StartSessionModal";
 import { SendModal } from "./modals/SendModal";
 import { HandoffModal } from "./modals/HandoffModal";
 import { EndSessionModal } from "./modals/EndSessionModal";
-import type { Project } from "../types";
+import type { Project, DomainEvent } from "../types";
 
-export function Dashboard() {
+function SessionEventBridge({
+  sessionId,
+  onEvent,
+}: {
+  sessionId: string;
+  onEvent: (e: DomainEvent) => void;
+}) {
+  useSessionEvents(sessionId, onEvent);
+  return null;
+}
+
+interface DashboardProps {
+  onGlobalEvent?: (e: DomainEvent) => void;
+}
+
+export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
   const { projects, createProject, removeProject } = useProjects();
   const {
     sessions,
     refresh,
+    applyEvent,
     createSession,
     sendText,
     triggerHandoff,
     killSession,
     toggleAutopilot,
-  } = useSessions(2000);
+  } = useSessions();
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [startOpen, setStartOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<Project | null>(null);
   const { expandedId, expand, collapse } = useExpandedSession();
   const [modal, setModal] = useState<null | "send" | "handoff" | "end">(null);
+
+  const bridgeHandler = useCallback(
+    (e: DomainEvent) => {
+      applyEvent(e);
+      onGlobalEvent?.(e);
+    },
+    [applyEvent, onGlobalEvent],
+  );
 
   const filtered = selectedProject
     ? sessions.filter((s) => s.project_id === selectedProject)
@@ -39,11 +64,11 @@ export function Dashboard() {
   const expanded = sessions.find((s) => s.id === expandedId) ?? null;
 
   const activeCount = filtered.filter(
-    (s) => !["complete", "killed", "error"].includes(s.state)
+    (s) => !["ended", "error"].includes(s.state)
   ).length;
 
   const attentionCount = filtered.filter(
-    (s) => s.state === "attention_needed"
+    (s) => s.state === "needs_attention"
   ).length;
 
   return (
@@ -169,6 +194,12 @@ export function Dashboard() {
           />
         </>
       )}
+
+      {/* Per-session event subscriptions — renders nothing, keeps subscriptions
+          alive for all sessions regardless of the current project filter. */}
+      {sessions.map((s) => (
+        <SessionEventBridge key={s.id} sessionId={s.id} onEvent={bridgeHandler} />
+      ))}
     </div>
   );
 }

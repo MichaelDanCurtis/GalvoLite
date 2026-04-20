@@ -56,7 +56,11 @@ pub fn on_user_prompt_submit(
     }
 }
 
-pub fn on_stop(db: &Db, session_id: Uuid) -> Option<String> {
+pub fn on_stop(
+    db: &Db,
+    session_id: Uuid,
+    bus: &crate::api::events::EventBroadcaster,
+) -> Option<String> {
     let conn = db.pool().get().ok()?;
     // Count consecutive hook.Stop events since the last reset event
     // (status_report or UserPromptSubmit). The current hook.Stop has
@@ -81,9 +85,10 @@ pub fn on_stop(db: &Db, session_id: Uuid) -> Option<String> {
 
     if consecutive >= STOP_RETRY_LIMIT {
         // Transition to Idle by emitting a synthetic system event.
-        let _ = crate::state::apply_event(
+        let _ = crate::state::apply_event_with_bus(
             db,
             session_id,
+            bus,
             crate::state::EventInput {
                 source: crate::state::Source::System,
                 kind: "system.stop_max_retries".into(),
@@ -99,6 +104,7 @@ pub fn on_stop(db: &Db, session_id: Uuid) -> Option<String> {
         // event for this session — a quick UserPromptSubmit before the
         // 3 s mark naturally cancels it.
         let db_for_task = db.clone();
+        let bus_for_task = bus.clone();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             let conn = match db_for_task.pool().get() {
@@ -113,9 +119,10 @@ pub fn on_stop(db: &Db, session_id: Uuid) -> Option<String> {
                 )
                 .ok();
             if last_kind.as_deref() == Some("hook.Stop") {
-                let _ = crate::state::apply_event(
+                let _ = crate::state::apply_event_with_bus(
                     &db_for_task,
                     session_id,
+                    &bus_for_task,
                     crate::state::EventInput {
                         source: crate::state::Source::System,
                         kind: "system.awaiting_input".into(),

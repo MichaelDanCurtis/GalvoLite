@@ -317,6 +317,47 @@ fn apply_column_side_effects(
     Ok(())
 }
 
+/// Like [`apply_event`] but also publishes `SessionEventAppended` and
+/// (when state changed) `SessionStateChanged` to the dashboard event bus.
+/// Production callers (hook handlers, MCP tools, signal pump, lifecycle)
+/// should prefer this over the bare [`apply_event`].
+///
+/// Order of published events matches the order of consumer interest:
+/// `SessionEventAppended` first (the underlying row), then
+/// `SessionStateChanged` (derived state mutation). Deduped events publish
+/// nothing — the row was a no-op so subscribers should not see a phantom.
+pub fn apply_event_with_bus(
+    db: &crate::db::Db,
+    session_id: uuid::Uuid,
+    bus: &crate::api::events::EventBroadcaster,
+    input: EventInput,
+) -> Result<EventOutcome> {
+    let kind = input.kind.clone();
+    let source_str = input.source.to_string();
+    let payload = input.payload.clone();
+    let outcome = apply_event(db, session_id, input)?;
+    if !outcome.deduped {
+        let ts = chrono::Utc::now().to_rfc3339();
+        bus.publish(crate::api::events::DomainEvent::SessionEventAppended {
+            session_id,
+            event_id: outcome.event_id,
+            kind,
+            source: source_str,
+            ts: ts.clone(),
+            payload,
+        });
+        if Some(outcome.next_state) != outcome.prev_state {
+            bus.publish(crate::api::events::DomainEvent::SessionStateChanged {
+                session_id,
+                prev: outcome.prev_state,
+                next: outcome.next_state,
+                last_event_ts: ts,
+            });
+        }
+    }
+    Ok(outcome)
+}
+
 /// Transition table from spec §8.6 plus signal-bridge rows. Anything not
 /// matched here is treated as logging-only (state unchanged).
 fn transition(current: SessionState, kind: &str) -> SessionState {

@@ -201,21 +201,24 @@ async fn full_mcp_lifecycle_initialize_through_each_tier() {
     assert!(kinds.contains(&"mcp.status_report"));
     assert!(kinds.contains(&"mcp.set_role"));
 
-    // 7. ask_operator — Tier 3 degraded.
+    // 7. ask_operator — Tier 3. Task 6 made this a real live wait; with no
+    // operator answering, the call times out after `timeout_secs` with
+    // `{answer:null, timed_out:true}`. Use `timeout_secs: 1` so the smoke
+    // doesn't block for the 30s default.
     let r = rpc(
         setup.app.clone(),
         &token,
         "tools/call",
         json!({
             "name": "ask_operator",
-            "arguments": { "question": "approve smoke?" }
+            "arguments": { "question": "approve smoke?", "timeout_secs": 1 }
         }),
         7,
     )
     .await;
     let body = inner_text(&r);
     assert_eq!(body["timed_out"], true);
-    assert_eq!(body["degraded"], true);
+    assert!(body["answer"].is_null());
 
     // 8. spawn_child — Tier 4 reserved stub.
     let r = rpc(

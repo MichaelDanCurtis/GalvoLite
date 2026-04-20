@@ -43,7 +43,11 @@ export function SessionRow({ session, onExpand, onRefresh }: Props) {
         }
       }}
     >
-      <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${dotColor}`} />
+      <div
+        className={`w-2.5 h-2.5 rounded-full shrink-0 ${dotColor}`}
+        data-testid="session-state-dot"
+        data-state={session.state}
+      />
 
       <div className="flex-1 min-w-0">
         <div className="text-sm truncate">{session.task_summary}</div>
@@ -51,6 +55,16 @@ export function SessionRow({ session, onExpand, onRefresh }: Props) {
           <RoleBadge role={session.role} />
           {session.branch && <span className="truncate">{session.branch}</span>}
           <span>{age}</span>
+          {session.last_event_kind?.startsWith("mcp.handoff") && (
+            <span
+              data-testid="handoff-tick"
+              className="text-xs text-emerald-400"
+              title="Handoff recorded"
+              aria-label="handoff recorded"
+            >
+              ✓
+            </span>
+          )}
         </div>
       </div>
 

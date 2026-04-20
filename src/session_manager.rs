@@ -4,6 +4,8 @@
 //! Owns the Db, tracks running sessions in-memory, provides spawn/list/get/
 //! kill/handoff/send/subscribe methods for the API and CLI.
 
+use crate::api::events::{DomainEvent, EventBroadcaster};
+use crate::api::operator::OperatorPromptRegistry;
 use crate::claude_md::{implementation_profile, InjectionPrompt};
 use crate::db::{Db, NewSession, Session};
 use crate::error::{Error, Result};
@@ -36,10 +38,30 @@ pub struct SessionManager {
     data_dir: PathBuf,
     running: StdMutex<HashMap<Uuid, RunningSession>>,
     mcp_registry: crate::mcp::registry::ToolRegistry,
+    event_bus: EventBroadcaster,
+    /// In-memory map of pending `ask_operator` prompts. The MCP handler
+    /// parks on a oneshot keyed by a fresh `prompt_id`; the
+    /// `POST /operator/prompt/:id/answer` route resolves it. Kept on the
+    /// SessionManager so both callers share the same pending-map.
+    operator_registry: Arc<OperatorPromptRegistry>,
 }
 
 impl SessionManager {
+    /// Backwards-compatible constructor — creates an internal broadcaster
+    /// with a 256-frame buffer. Tests that don't observe events use this.
     pub fn new(db: Db, data_dir: PathBuf) -> Self {
+        // 256-frame buffer is enough headroom for normal dashboard load.
+        // Lagged subscribers drop frames and re-fetch on reconnect (see
+        // EventBroadcaster::publish doc). OperatorPrompt durability is
+        // guaranteed by OperatorPromptRegistry (Task 6), not the broadcast
+        // ring — a dropped frame just delays modal display until a HTTP poll.
+        Self::with_event_bus(db, data_dir, EventBroadcaster::new(256))
+    }
+
+    /// Construct a `SessionManager` with a caller-supplied `EventBroadcaster`.
+    /// Use this when the caller (e.g. the dashboard server in `main.rs`) needs
+    /// to retain a clone of the broadcaster to subscribe or publish independently.
+    pub fn with_event_bus(db: Db, data_dir: PathBuf, event_bus: EventBroadcaster) -> Self {
         match db.reconcile_orphaned_sessions() {
             Ok(0) => {}
             Ok(n) => tracing::info!("reconciled {n} orphaned session(s) to Error on startup"),
@@ -50,7 +72,29 @@ impl SessionManager {
             data_dir,
             running: StdMutex::new(HashMap::new()),
             mcp_registry: crate::mcp::registry::ToolRegistry::build(),
+            event_bus,
+            operator_registry: OperatorPromptRegistry::new(),
         }
+    }
+
+    /// Shared handle to the `ask_operator` pending-prompt registry. The MCP
+    /// handler calls `register_and_wait`; the HTTP answer route calls
+    /// `answer`. Both go through this one Arc.
+    pub fn operator_registry(&self) -> &Arc<OperatorPromptRegistry> {
+        &self.operator_registry
+    }
+
+    /// Subscribe to the domain-event stream. Each call returns an independent
+    /// `broadcast::Receiver` — the WS handler in `api::mod` calls this once per
+    /// connected dashboard socket.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<DomainEvent> {
+        self.event_bus.subscribe()
+    }
+
+    /// Publish-side handle to the broadcaster. MCP tool handlers call this to
+    /// emit `OperatorToast` / `OperatorPrompt` / `SessionRoleChanged` events.
+    pub fn event_bus(&self) -> &EventBroadcaster {
+        &self.event_bus
     }
 
     pub fn db(&self) -> &Db {
@@ -157,9 +201,10 @@ impl SessionManager {
 
         let fx = Arc::new(PtySideEffects::new(handle.clone()));
         let driver = Arc::new(RitualDriver::new(fx));
-        let started = crate::state::apply_event(
+        let started = crate::state::apply_event_with_bus(
             &self.db,
             session.id,
+            &self.event_bus,
             crate::state::EventInput {
                 source: crate::state::Source::System,
                 kind: "system.session_started".into(),
@@ -242,9 +287,10 @@ impl SessionManager {
                     .map(|p| p.to_string_lossy().into_owned());
                 let _ = mgr.db.end_cycle_if_unended(prev, handoff_path.as_deref());
             }
-            let _ = crate::state::apply_event(
+            let _ = crate::state::apply_event_with_bus(
                 &mgr.db,
                 session_id,
+                &mgr.event_bus,
                 crate::state::EventInput {
                     source: crate::state::Source::System,
                     kind: "system.session_ended".into(),
@@ -372,9 +418,10 @@ impl SessionManager {
         // pty_exit path; one wins, one no-ops. Terminal-state guard inside
         // apply_event also returns Err if already Ended — treat as "not
         // killed by us" rather than bubbling.
-        let killed = crate::state::apply_event(
+        let killed = crate::state::apply_event_with_bus(
             &self.db,
             id,
+            &self.event_bus,
             crate::state::EventInput {
                 source: crate::state::Source::Operator,
                 kind: "system.session_ended".into(),
@@ -541,6 +588,11 @@ fn orphan_session(db: &Db, session_id: Uuid, reason: &'static str) {
             dedup_key: Some(format!("session-orphaned:{session_id}")),
         },
     );
+    // Note: orphan_session is called from spawn_session error paths where we
+    // don't have a reference to the event_bus; the apply_event call above
+    // handles DB state. The bus publish is intentionally omitted here — the
+    // SessionManager callers that have bus access use apply_event_with_bus
+    // directly. This helper is kept as bare apply_event per Task 3 design.
 }
 
 /// Validate and canonicalize a project path.

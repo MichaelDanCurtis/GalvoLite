@@ -21,6 +21,10 @@ pub struct TestApp {
     /// Alias of `router` — Sub-plan 3 mcp_* tests use `setup.app`.
     pub app: axum::Router,
     pub db: Db,
+    /// Exposed so Sub-plan 4 tests can call `mgr.subscribe_events()` to assert
+    /// on the domain-event broadcaster. The router already holds its own
+    /// `Arc<SessionManager>`; this is the same Arc, cloned.
+    pub mgr: Arc<SessionManager>,
     pub _dir: TempDir,
 }
 
@@ -29,11 +33,12 @@ pub fn test_app() -> TestApp {
     let data_dir = dir.path().to_path_buf();
     let db = Db::open(data_dir.join("test.sqlite")).unwrap();
     let mgr = Arc::new(SessionManager::new(db.clone(), data_dir));
-    let router = galvolite::api::router(mgr);
+    let router = galvolite::api::router(mgr.clone());
     TestApp {
         app: router.clone(),
         router,
         db,
+        mgr,
         _dir: dir,
     }
 }
@@ -215,4 +220,51 @@ pub fn seed_session_in_state_at(
     let (sid, token) = seed_session(db, project_dir);
     force_state(db, sid, state);
     (sid, token)
+}
+
+/// Insert a batch of `plan_steps` rows for a session. Rows are written with
+/// DB-native status values (`pending | in_progress | done | blocked`) — the
+/// API helper is responsible for mapping `in_progress` → `working` on the way
+/// out, so tests assert against the DB-native shape here.
+///
+/// Tuple shape: `(step_hash, ordinal, title, status, note)`.
+pub fn seed_plan_steps(
+    db: &Db,
+    session_id: uuid::Uuid,
+    rows: &[(&str, i64, &str, &str, Option<&str>)],
+) {
+    let conn = db.pool().get().unwrap();
+    for (hash, ordinal, title, status, note) in rows {
+        conn.execute(
+            "INSERT INTO plan_steps (session_id, step_hash, ordinal, title, status, note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                session_id.to_string(),
+                hash,
+                ordinal,
+                title,
+                status,
+                note,
+            ],
+        )
+        .unwrap();
+    }
+}
+
+/// Post a pre-built JSON-RPC envelope to `/mcp` with the given bearer token
+/// and return the parsed JSON response. Sub-plan 4 tests use this when they
+/// need to hand-craft the envelope (e.g. to spawn the request on one task
+/// and fulfill it from another).
+pub async fn rpc(app: axum::Router, token: &str, body: Value) -> Value {
+    let req = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap()
 }

@@ -26,7 +26,7 @@ export function SessionDetail({ session, onRefresh }: Props) {
   };
 
   const dotColor = STATE_COLORS[session.state] ?? "bg-gray-400";
-  const isRunning = !["complete", "killed", "error"].includes(session.state);
+  const isRunning = !["ended", "error"].includes(session.state);
 
   return (
     <div className="border-l border-gray-800 p-4 space-y-4 overflow-auto">

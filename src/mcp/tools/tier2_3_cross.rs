@@ -1,10 +1,12 @@
 //! Tier-2/3 MCP tools: cross-session reads + writes + operator surface.
 //!
-//! Spec §5.3 (cross-session) and §5.4 (operator). The operator tools
-//! (`ask_operator`, `notify_operator`) ship in DEGRADED MODE — they write
-//! event rows today but the dashboard WS round-trip lands in Sub-plan 4.
-//! `ask_operator` returns `{answer:null, timed_out:true, degraded:true}`
-//! immediately so the model never hangs.
+//! Spec §5.3 (cross-session) and §5.4 (operator). `ask_operator` parks the
+//! model turn on a oneshot registered with the SessionManager's
+//! `OperatorPromptRegistry`, publishes an `operator.prompt` domain event for
+//! subscribed dashboard sockets, and resolves when either an operator answer
+//! arrives via `POST /operator/prompt/:id/answer` or the per-call timeout
+//! fires (returning `{answer:null, timed_out:true}`). `notify_operator` is a
+//! one-shot toast event — event row + `operator.toast` broadcast.
 
 use crate::error::Error;
 use crate::mcp::registry::{Tier, ToolCtx, ToolDef, ToolOutcome};
@@ -226,9 +228,10 @@ async fn send_to_session(ctx: ToolCtx, args: Value) -> ToolOutcome {
     // Write event row against the TARGET session so it shows up in the
     // receiver's event log. Best-effort: if the target row is gone we still
     // attempt the PTY write below (which will then return SessionNotFound).
-    let _ = state::apply_event(
+    let _ = state::apply_event_with_bus(
         ctx.mgr.db(),
         target,
+        ctx.mgr.event_bus(),
         EventInput {
             source: Source::Mcp,
             kind: "mcp.send_to_session".into(),
@@ -264,7 +267,7 @@ async fn send_to_session(ctx: ToolCtx, args: Value) -> ToolOutcome {
 }
 
 // ---------------------------------------------------------------------------
-// ask_operator (degraded)
+// ask_operator
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -280,9 +283,13 @@ async fn ask_operator(ctx: ToolCtx, args: Value) -> ToolOutcome {
         Err(e) => return ToolOutcome::InvalidParams(e.to_string()),
     };
 
-    let _ = state::apply_event(
+    // Durable record: the question was asked. Landed BEFORE the live prompt
+    // event so event-row order matches causal order (ask row precedes any
+    // answer row a future operator action might write).
+    let _ = state::apply_event_with_bus(
         ctx.mgr.db(),
         ctx.session_id,
+        ctx.mgr.event_bus(),
         EventInput {
             source: Source::Mcp,
             kind: "mcp.ask_operator".into(),
@@ -295,19 +302,23 @@ async fn ask_operator(ctx: ToolCtx, args: Value) -> ToolOutcome {
         },
     );
 
-    // DEGRADED MODE — Sub-plan 4 wires the WS prompt round-trip; until then
-    // we return an immediate timed-out reply so the model doesn't hang.
-    tracing::warn!(
-        session = %ctx.session_id,
-        "ask_operator called in degraded mode (Sub-plan 4 not landed) — \
-         returning timed_out immediately"
-    );
+    // Live wait: publishes an `operator.prompt` domain event and parks on a
+    // oneshot until the HTTP answer lands (or the per-call timeout fires).
+    // The registry returns `{answer, timed_out}` directly; we pass it through
+    // unchanged and let the transport layer wrap it in content[0].text.
+    let answer = ctx
+        .mgr
+        .operator_registry()
+        .register_and_wait(
+            ctx.mgr.event_bus(),
+            ctx.session_id,
+            parsed.question.clone(),
+            parsed.choices.clone(),
+            parsed.timeout_secs,
+        )
+        .await;
 
-    ToolOutcome::Ok(json!({
-        "answer":    serde_json::Value::Null,
-        "timed_out": true,
-        "degraded":  true,
-    }))
+    ToolOutcome::Ok(answer)
 }
 
 // ---------------------------------------------------------------------------
@@ -329,9 +340,10 @@ async fn notify_operator(ctx: ToolCtx, args: Value) -> ToolOutcome {
         return ToolOutcome::InvalidParams(format!("unknown level: {}", parsed.level));
     }
 
-    let _ = state::apply_event(
+    let _ = state::apply_event_with_bus(
         ctx.mgr.db(),
         ctx.session_id,
+        ctx.mgr.event_bus(),
         EventInput {
             source: Source::Mcp,
             kind: "mcp.notify_operator".into(),
@@ -340,12 +352,14 @@ async fn notify_operator(ctx: ToolCtx, args: Value) -> ToolOutcome {
         },
     );
 
-    // Sub-plan 4 fans this out as a dashboard toast via WS. Today: event row only.
-    tracing::warn!(
-        session = %ctx.session_id,
-        "notify_operator called in degraded mode (Sub-plan 4 not landed) — \
-         event row written, no dashboard toast"
-    );
+    // Sub-plan 4: fan out to dashboard sockets as an operator.toast frame.
+    ctx.mgr
+        .event_bus()
+        .publish(crate::api::events::DomainEvent::OperatorToast {
+            session_id: ctx.session_id,
+            level: parsed.level.clone(),
+            message: parsed.message.clone(),
+        });
 
-    ToolOutcome::Ok(json!({ "ok": true, "degraded": true }))
+    ToolOutcome::Ok(json!({ "ok": true }))
 }
