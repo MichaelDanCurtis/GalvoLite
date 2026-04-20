@@ -49,6 +49,9 @@ export function MetaTab({ session }: Props) {
       <section data-testid="meta-handoff">
         <h3 className="text-xs uppercase tracking-wide text-neutral-500 mb-1">Handoff</h3>
         {handoffPath ? (
+          // TODO(sub-plan-5): handoff_path is a local filesystem path, so this
+          // <a href> is inert in a browser and unreachable from Tauri without
+          // the opener plugin. Replace with a copy-path / open-in-editor action.
           <a
             href={handoffPath}
             className="text-blue-300 hover:underline break-all font-mono text-xs"
@@ -63,8 +66,8 @@ export function MetaTab({ session }: Props) {
       <section data-testid="meta-counters">
         <h3 className="text-xs uppercase tracking-wide text-neutral-500 mb-1">Counters</h3>
         <div className="flex gap-4 text-neutral-300">
-          <span data-testid="meta-turns">{turns.toLocaleString()} turns</span>
-          <span data-testid="meta-tokens">{tokens.toLocaleString()} tokens</span>
+          <span data-testid="meta-turns">{turns.toLocaleString("en-US")} turns</span>
+          <span data-testid="meta-tokens">{tokens.toLocaleString("en-US")} tokens</span>
         </div>
       </section>
     </div>
