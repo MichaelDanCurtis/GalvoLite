@@ -1,9 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import type { Session } from "../types";
 import { TerminalPreview } from "./TerminalPreview";
 import { SessionRail } from "./SessionRail";
 import { RoleBadge } from "./RoleBadge";
+
+type Tab = "terminal" | "events" | "plan" | "meta";
 
 interface Props {
   session: Session;
@@ -22,6 +24,8 @@ export function ExpandedSessionView({
   onEnd,
   onToggleAutopilot,
 }: Props) {
+  const [tab, setTab] = useState<Tab>("terminal");
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -55,9 +59,36 @@ export function ExpandedSessionView({
           </div>
           <div className="opacity-60">ESC or click outside to close</div>
         </header>
+        <div role="tablist" className="flex gap-1 px-4 py-1 border-b border-neutral-800 text-xs text-neutral-300">
+          {(["terminal", "events", "plan", "meta"] as const).map((t) => {
+            const label = t.charAt(0).toUpperCase() + t.slice(1);
+            return (
+              <button
+                key={t}
+                role="tab"
+                aria-selected={tab === t}
+                onClick={() => setTab(t)}
+                className={`px-3 py-1 rounded-t ${tab === t ? "bg-neutral-800 text-neutral-100" : "hover:bg-neutral-900 text-neutral-400"}`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
         <div className="flex flex-1 min-h-0">
           <div className="flex-1 min-w-0">
-            <TerminalPreview sessionId={session.id} readOnly={session.autopilot} />
+            {tab === "terminal" && (
+              <TerminalPreview sessionId={session.id} readOnly={session.autopilot} />
+            )}
+            {tab === "events" && (
+              <div data-testid="tab-panel-events" className="p-4 text-sm text-neutral-400">Events feed — coming in Task 13</div>
+            )}
+            {tab === "plan" && (
+              <div data-testid="tab-panel-plan" className="p-4 text-sm text-neutral-400">Plan checklist — coming in Task 14</div>
+            )}
+            {tab === "meta" && (
+              <div data-testid="tab-panel-meta" className="p-4 text-sm text-neutral-400">Meta — coming in Task 15</div>
+            )}
           </div>
           <SessionRail
             autopilot={session.autopilot}
