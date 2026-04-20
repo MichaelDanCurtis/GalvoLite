@@ -26,6 +26,13 @@ interface Options {
  * byte arrives in the next frame — we won't catch that one. Rare enough
  * to be a non-issue; xterm itself buffers partial UTF-8 fine.
  */
+export function mapKeystrokeForPty(data: string): string {
+  // xterm.js emits "\n" for the Return key but PTYs (and Claude Code) want
+  // "\r". Translate every LF to CR. CRLF stays as CRR which the line
+  // discipline coalesces back to CR.
+  return data.replace(/\n/g, "\r");
+}
+
 function substituteShadingToBlock(buf: Uint8Array): void {
   const n = buf.length - 2;
   for (let i = 0; i < n; i++) {
@@ -151,7 +158,7 @@ export function useTerminal(
       const handleData = (data: string) => {
         if (readOnlyRef.current) return;
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        ws.send(JSON.stringify({ type: "input", data }));
+        ws.send(JSON.stringify({ type: "input", data: mapKeystrokeForPty(data) }));
       };
 
       term.onData(handleData);
