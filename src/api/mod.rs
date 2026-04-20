@@ -3,6 +3,7 @@
 //! Builds a Router that the CLI `serve` command and the Tauri binary both use.
 //! All business logic is delegated to SessionManager.
 
+pub mod events;
 pub mod hook_handlers;
 pub mod hooks;
 
