@@ -750,6 +750,44 @@ impl Db {
         Ok(rows)
     }
 
+    /// Read the structured plan steps for a session, ordered by `ordinal ASC`.
+    /// Shaped for the dashboard's Plan tab: `{ hash, text, status, note }`.
+    ///
+    /// The DB stores `status` with `'in_progress'` per the `0002` migration's
+    /// CHECK constraint, but the UI `PlanStep` type uses `'working'` — we
+    /// rewrite that single value on the way out. All other statuses pass
+    /// through unchanged. `note` is always emitted (as JSON `null` when the
+    /// column is NULL) so consumers get a stable shape.
+    pub fn read_plan_steps(&self, session_id: Uuid) -> Result<Vec<serde_json::Value>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT step_hash, title, status, note
+             FROM plan_steps
+             WHERE session_id = ?1
+             ORDER BY ordinal ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![session_id.to_string()], |r| {
+                let hash: String = r.get(0)?;
+                let text: String = r.get(1)?;
+                let status: String = r.get(2)?;
+                let note: Option<String> = r.get(3)?;
+                let status = if status == "in_progress" {
+                    "working".to_string()
+                } else {
+                    status
+                };
+                Ok(serde_json::json!({
+                    "hash":   hash,
+                    "text":   text,
+                    "status": status,
+                    "note":   note,
+                }))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Look up sibling sessions of a given session (same project), excluding
     /// the caller. Returns lightweight rows for the MCP `list_siblings` tool.
     pub fn list_session_siblings(

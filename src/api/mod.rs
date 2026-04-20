@@ -31,6 +31,7 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route("/api/sessions/:id/autopilot", put(set_autopilot))
         .route("/api/sessions/:id/signals", get(get_signals))
         .route("/api/sessions/:id/events", get(get_events))
+        .route("/api/sessions/:id/plan_steps", get(get_plan_steps))
         .route("/api/sessions/:id/terminal", get(terminal_ws))
         .route("/api/fs/list", get(list_directory))
         .route("/hooks/ingest", post(hooks::ingest))
@@ -273,6 +274,20 @@ async fn get_events(
         raw.min(EVENTS_MAX_LIMIT)
     };
     match mgr.db().read_recent_events(id, limit) {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => err_to_response(e),
+    }
+}
+
+/// `GET /api/sessions/:id/plan_steps` — structured plan steps for the
+/// dashboard's Plan tab, ordered by ordinal ASC. Row shape: `{ hash, text,
+/// status, note }` matching the UI `PlanStep` type. Status `in_progress` is
+/// rewritten to `working` by the DB helper so the wire shape is UI-native.
+async fn get_plan_steps(
+    State(mgr): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Response {
+    match mgr.db().read_plan_steps(id) {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => err_to_response(e),
     }

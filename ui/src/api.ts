@@ -3,6 +3,7 @@ import type {
   Session,
   SignalRow,
   EventRow,
+  PlanStep,
   CreateProjectReq,
   CreateSessionReq,
   SendReq,
@@ -73,6 +74,9 @@ export const api = {
 
   getSessionEvents: (id: string, limit: number = 100) =>
     request<EventRow[]>(`/api/sessions/${id}/events?limit=${limit}`),
+
+  getSessionPlanSteps: (id: string) =>
+    request<PlanStep[]>(`/api/sessions/${id}/plan_steps`),
 
   deleteProject: (id: string) =>
     request<void>(`/api/projects/${id}`, { method: "DELETE" }),

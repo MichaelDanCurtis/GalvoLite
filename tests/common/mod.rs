@@ -222,6 +222,35 @@ pub fn seed_session_in_state_at(
     (sid, token)
 }
 
+/// Insert a batch of `plan_steps` rows for a session. Rows are written with
+/// DB-native status values (`pending | in_progress | done | blocked`) — the
+/// API helper is responsible for mapping `in_progress` → `working` on the way
+/// out, so tests assert against the DB-native shape here.
+///
+/// Tuple shape: `(step_hash, ordinal, title, status, note)`.
+pub fn seed_plan_steps(
+    db: &Db,
+    session_id: uuid::Uuid,
+    rows: &[(&str, i64, &str, &str, Option<&str>)],
+) {
+    let conn = db.pool().get().unwrap();
+    for (hash, ordinal, title, status, note) in rows {
+        conn.execute(
+            "INSERT INTO plan_steps (session_id, step_hash, ordinal, title, status, note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                session_id.to_string(),
+                hash,
+                ordinal,
+                title,
+                status,
+                note,
+            ],
+        )
+        .unwrap();
+    }
+}
+
 /// Post a pre-built JSON-RPC envelope to `/mcp` with the given bearer token
 /// and return the parsed JSON response. Sub-plan 4 tests use this when they
 /// need to hand-craft the envelope (e.g. to spawn the request on one task

@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import type { DomainEvent, EventRow, Session } from "../types";
+import type { DomainEvent, EventRow, PlanStep, Session } from "../types";
 import { api } from "../api";
 import { useSessionEvents } from "../hooks/useSessionEvents";
 import { TerminalPreview } from "./TerminalPreview";
 import { SessionRail } from "./SessionRail";
 import { RoleBadge } from "./RoleBadge";
 import { EventsTab } from "./EventsTab";
+import { PlanTab } from "./PlanTab";
 
 type Tab = "terminal" | "events" | "plan" | "meta";
 
@@ -30,6 +31,8 @@ export function ExpandedSessionView({
   const [tab, setTab] = useState<Tab>("terminal");
   const [events, setEvents] = useState<EventRow[]>([]);
   const [loadError, setLoadError] = useState(false);
+  const [planSteps, setPlanSteps] = useState<PlanStep[]>([]);
+  const [planError, setPlanError] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -60,6 +63,27 @@ export function ExpandedSessionView({
     return () => { cancelled = true; };
   }, [session.id]);
 
+  // Initial fetch for the Plan tab. Same cancel-safe + reset-on-id-change
+  // pattern as the Events fetch above — re-opening a different session must
+  // not briefly show the previous session's plan.
+  useEffect(() => {
+    let cancelled = false;
+    setPlanSteps([]);
+    setPlanError(false);
+    api.getSessionPlanSteps(session.id).then(
+      (rows) => {
+        if (!cancelled) {
+          setPlanSteps(rows);
+          setPlanError(false);
+        }
+      },
+      () => {
+        if (!cancelled) setPlanError(true);
+      },
+    );
+    return () => { cancelled = true; };
+  }, [session.id]);
+
   // Live append from the push channel. Prepend (newest-first) and
   // deduplicate against the initial fetch + any concurrent pushes — the
   // initial GET and the first live frame can race when a session has just
@@ -67,21 +91,46 @@ export function ExpandedSessionView({
   // push payload doesn't carry them, and this matches the DB helper's
   // shape for rows with no state transition.
   useSessionEvents(session.id, (e: DomainEvent) => {
-    if (e.type !== "session.event_appended") return;
-    if (e.session_id !== session.id) return;
-    setEvents((prev) => {
-      if (prev.some((row) => row.id === e.event_id)) return prev;
-      const row: EventRow = {
-        id: e.event_id,
-        kind: e.kind,
-        source: e.source,
-        ts: e.ts,
-        payload: e.payload,
-        prev_state: null,
-        next_state: null,
-      };
-      return [row, ...prev];
-    });
+    if (e.type === "session.event_appended") {
+      if (e.session_id !== session.id) return;
+      setEvents((prev) => {
+        if (prev.some((row) => row.id === e.event_id)) return prev;
+        const row: EventRow = {
+          id: e.event_id,
+          kind: e.kind,
+          source: e.source,
+          ts: e.ts,
+          payload: e.payload,
+          prev_state: null,
+          next_state: null,
+        };
+        return [row, ...prev];
+      });
+      return;
+    }
+    if (e.type === "session.plan_replaced") {
+      if (e.session_id !== session.id) return;
+      // Full replacement — the producer (Sub-plan 5 `set_plan`) is always
+      // authoritative on this event.
+      setPlanSteps(e.steps);
+      setPlanError(false);
+      return;
+    }
+    if (e.type === "session.plan_step_changed") {
+      if (e.session_id !== session.id) return;
+      setPlanSteps((prev) => {
+        const idx = prev.findIndex((s) => s.hash === e.step_hash);
+        if (idx === -1) return prev; // no-op: step not in current view
+        const next = prev.slice();
+        next[idx] = {
+          ...prev[idx],
+          status: e.next_status,
+          note: e.note ?? undefined,
+        };
+        return next;
+      });
+      return;
+    }
   });
 
   return (
@@ -145,7 +194,18 @@ export function ExpandedSessionView({
               </div>
             )}
             {tab === "plan" && (
-              <div data-testid="tab-panel-plan" className="p-4 text-sm text-neutral-400">Plan checklist — coming in Task 14</div>
+              <div data-testid="tab-panel-plan" className="h-full overflow-hidden">
+                {planSteps.length === 0 && planError ? (
+                  <div
+                    data-testid="plan-error"
+                    className="p-4 text-sm text-red-400"
+                  >
+                    Could not load plan
+                  </div>
+                ) : (
+                  <PlanTab steps={planSteps} />
+                )}
+              </div>
             )}
             {tab === "meta" && (
               <div data-testid="tab-panel-meta" className="p-4 text-sm text-neutral-400">Meta — coming in Task 15</div>
