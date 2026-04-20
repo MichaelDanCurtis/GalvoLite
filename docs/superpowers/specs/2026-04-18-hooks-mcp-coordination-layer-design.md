@@ -258,12 +258,12 @@ Each hook response is computed from post-write state. A concurrent MCP call land
      {
        "mcpServers": {
          "galvolite": {
-           "type": "sse",
+           "type": "http",
            "url": "http://127.0.0.1:3001/mcp",
            "headers": { "Authorization": "Bearer <token>" }
          },
          "portfolio": {
-           "type": "sse",
+           "type": "http",
            "url": "http://127.0.0.1:<gw-port>/mcp"
          }
        }
@@ -586,6 +586,17 @@ PRD-faithful in letter (fork `thepushkarp/handoff`) but wrong in spirit for our 
 
 Self-cancelling: you can't call a tool to curate the toolset before the session that has the tool exists, and toggling tools mid-session cannot claw back tokens already in the system prompt. Moved to spawn-time profile curation (§7.1) + future Docker MCP Gateway portfolio management.
 
+### 13.6 SSE-only MCP transport (the older spec revision)
+
+**Proposed:** Implement only the legacy two-endpoint SSE transport (`GET /mcp/sse` + `POST /mcp/messages`) since CC's reference clients shipped with that shape first.
+
+**Rejected because:**
+- The 2025-03-26 MCP spec revision marks SSE-only as deprecated and adds Streamable HTTP as the recommended transport.
+- Streamable HTTP collapses two endpoints into one, removes the requirement for clients to maintain a separate event-stream connection for trivial request/response tools (which is most of our catalog), and preserves SSE as an optional per-request upgrade for handlers that genuinely stream.
+- Implementing the deprecated path first means a forced migration when CC bumps client versions; implementing Streamable HTTP first means the legacy path becomes a backward-compat fallback only if §15 dep #1 lands negative.
+
+**Alternatives considered:** dual-host both transports on different routes (`/mcp` vs `/mcp/sse`) — wait until §15 dep #1 has data before paying the maintenance cost.
+
 ---
 
 ## 14. Future work
@@ -604,7 +615,7 @@ Self-cancelling: you can't call a tool to curate the toolset before the session 
 
 These are open capability questions whose answers shape implementation but not the design shape:
 
-1. **CC SSE MCP transport stability.** Does Claude Code's SSE MCP client handle long-lived streams, reconnect, and `Authorization` headers correctly across versions? If not, stdio-shim fallback is the Plan B.
+1. **CC Streamable HTTP MCP transport stability.** Does Claude Code's MCP client implement the 2025-03-26 Streamable HTTP transport (single POST endpoint, optional SSE upgrade)? If not, fall back to the legacy SSE-only path documented at §7.4, which keeps two endpoints (`POST /mcp/messages` + `GET /mcp/sse`) bridged through the same dispatcher. Stdio shim is the secondary fallback.
 2. **CC `tools/list_changed` round-trip.** If/when we implement dynamic MCP toggling, does CC re-render the system prompt on `tools/list_changed` notifications? If not, runtime toggling can only *add* tools, never remove tokens.
 3. **PreCompact hook `inject_text` semantics.** Does CC give the model a turn to respond to injected text before compaction proceeds? Needs verification; falls back to blocking compact via `action: "block"` if necessary.
 4. **Stop hook max-retries.** CC documents a retry limit on Stop-hook continue actions; confirm current value and align our "max 3 retries" accordingly.
