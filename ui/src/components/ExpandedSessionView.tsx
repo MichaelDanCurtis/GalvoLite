@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import type { DomainEvent, EventRow, Session } from "../types";
 import { api } from "../api";
@@ -29,6 +29,7 @@ export function ExpandedSessionView({
 }: Props) {
   const [tab, setTab] = useState<Tab>("terminal");
   const [events, setEvents] = useState<EventRow[]>([]);
+  const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -44,11 +45,17 @@ export function ExpandedSessionView({
   useEffect(() => {
     let cancelled = false;
     setEvents([]);
+    setLoadError(false);
     api.getSessionEvents(session.id, 100).then(
       (rows) => {
-        if (!cancelled) setEvents(rows);
+        if (!cancelled) {
+          setEvents(rows);
+          setLoadError(false);
+        }
       },
-      () => { /* transient network error; leave the list empty */ },
+      () => {
+        if (!cancelled) setLoadError(true);
+      },
     );
     return () => { cancelled = true; };
   }, [session.id]);
@@ -56,8 +63,10 @@ export function ExpandedSessionView({
   // Live append from the push channel. Prepend (newest-first) and
   // deduplicate against the initial fetch + any concurrent pushes — the
   // initial GET and the first live frame can race when a session has just
-  // emitted an event.
-  const onEvent = useCallback((e: DomainEvent) => {
+  // emitted an event. `prev_state`/`next_state` are explicitly null — the
+  // push payload doesn't carry them, and this matches the DB helper's
+  // shape for rows with no state transition.
+  useSessionEvents(session.id, (e: DomainEvent) => {
     if (e.type !== "session.event_appended") return;
     if (e.session_id !== session.id) return;
     setEvents((prev) => {
@@ -68,11 +77,12 @@ export function ExpandedSessionView({
         source: e.source,
         ts: e.ts,
         payload: e.payload,
+        prev_state: null,
+        next_state: null,
       };
       return [row, ...prev];
     });
-  }, [session.id]);
-  useSessionEvents(session.id, onEvent);
+  });
 
   return (
     <motion.div
@@ -122,7 +132,16 @@ export function ExpandedSessionView({
             )}
             {tab === "events" && (
               <div data-testid="tab-panel-events" className="h-full overflow-hidden">
-                <EventsTab events={events} />
+                {events.length === 0 && loadError ? (
+                  <div
+                    data-testid="events-error"
+                    className="p-4 text-sm text-red-400"
+                  >
+                    Could not load events
+                  </div>
+                ) : (
+                  <EventsTab events={events} />
+                )}
               </div>
             )}
             {tab === "plan" && (

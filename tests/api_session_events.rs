@@ -87,8 +87,22 @@ async fn get_session_events_clamps_limit() {
     let setup = common::test_app();
     let proj = setup._dir.path().join("proj3");
     let (sid, _token) = common::seed_session(&setup.db, &proj);
-    // Over-large limit should be clamped (no 400). We don't care about the
-    // exact max here — only that the request succeeds.
+    // Seed more rows than the clamp so we can assert the cap actually holds.
+    // 600 > the 500-row `EVENTS_MAX_LIMIT` the handler enforces — asking for
+    // 100000 must still return at most 500.
+    for i in 0..600 {
+        galvolite::state::apply_event(
+            &setup.db,
+            sid,
+            galvolite::state::EventInput {
+                source: galvolite::state::Source::System,
+                kind: format!("system.e{i}"),
+                payload: serde_json::json!({}),
+                dedup_key: None,
+            },
+        )
+        .unwrap();
+    }
     let req = Request::builder()
         .method("GET")
         .uri(format!("/api/sessions/{sid}/events?limit=100000"))
@@ -96,4 +110,15 @@ async fn get_session_events_clamps_limit() {
         .unwrap();
     let resp = setup.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let arr = v.as_array().expect("events endpoint returns a JSON array");
+    // Over-large limit must be clamped — never return more than the cap.
+    // Asserting `<=` rather than exactly 500 so the test only breaks if the
+    // cap is truly violated, not merely tightened.
+    assert!(
+        arr.len() <= 500,
+        "expected <= 500 rows after clamp, got {}",
+        arr.len()
+    );
 }
