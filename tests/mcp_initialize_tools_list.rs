@@ -54,9 +54,6 @@ async fn tools_list_returns_array_with_required_descriptor_shape() {
     let resp = rpc(&setup.app, &token, "tools/list").await;
     let tools = resp["result"]["tools"].as_array().expect("tools array");
 
-    // Tools registry is empty until Tasks 6-10 land. After Task 10, the smoke
-    // test (Task 11) asserts each named tool from spec §5 is present.
-    // For now: assert structural shape on whatever is there.
     for t in tools {
         assert!(t["name"].is_string());
         assert!(
@@ -70,6 +67,42 @@ async fn tools_list_returns_array_with_required_descriptor_shape() {
             t["name"]
         );
         assert_eq!(t["inputSchema"]["type"], "object");
+    }
+}
+
+#[tokio::test]
+async fn tools_list_includes_every_named_tool_in_spec() {
+    let setup = common::test_app();
+    let (_, token) = common::seed_session(&setup.db, &setup._dir.path().join("proj"));
+    let resp = rpc(&setup.app, &token, "tools/list").await;
+    let names: Vec<String> = resp["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+
+    // Sample one tool from each spec §5.x section to prove the catalog is
+    // complete. The smoke test (Task 11) asserts the full §5 catalog.
+    for required in &[
+        // §5.1 active tools
+        "status_report",
+        "set_role",
+        "whoami",
+        "set_plan",
+        "write_handoff",
+        "request_attention",
+        // §5.2–§5.6 reserved stubs
+        "spawn_child",
+        "open_pr",
+        "claim_paths",
+        "list_available_mcps",
+        "read_context",
+    ] {
+        assert!(
+            names.contains(&required.to_string()),
+            "missing tool: {required} (have: {names:?})"
+        );
     }
 }
 
