@@ -77,10 +77,27 @@ pub async fn ingest(
         }
     })?;
 
-    // Per-hook semantic responses (inject_text, action) come in Tasks 7-9.
+    // Per-hook semantics (inject_text, action). Lifecycle handlers in
+    // Task 7; turn/observe handlers in Tasks 8-9.
+    use super::hook_handlers::{lifecycle, observe, turn};
+    let inject = match req.hook {
+        HookKind::SessionStart => lifecycle::on_session_start(db, session_id, &req.payload),
+        HookKind::SessionEnd => {
+            lifecycle::on_session_end(db, session_id, &req.payload);
+            None
+        }
+        HookKind::UserPromptSubmit => {
+            turn::on_user_prompt_submit(db, session_id, &req.payload)
+        }
+        HookKind::Stop => turn::on_stop(db, session_id),
+        HookKind::PreCompact => turn::on_pre_compact(db, session_id),
+        HookKind::PostToolUse => observe::on_post_tool_use(db, session_id, &req.payload),
+        HookKind::Notification => observe::on_notification(db, session_id, &req.payload),
+    };
+
     Ok(Json(HookIngestResponse {
         action: HookAction::Proceed,
-        inject_text: None,
+        inject_text: inject,
         note: None,
     }))
 }

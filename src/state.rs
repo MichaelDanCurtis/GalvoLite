@@ -246,7 +246,9 @@ fn transition(current: SessionState, kind: &str) -> SessionState {
         // surface lands, recognize the synthetic kind so spawn lands the
         // session in Working in one event.
         (Starting, "system.session_started") | (Starting, "hook.SessionStart") => Working,
-        (_,        "system.session_ended")   | (_,        "hook.SessionEnd")   => Ended,
+        (s,        "system.session_ended")   if !s.is_terminal()               => Ended,
+        (s,        "hook.SessionEnd")        if !s.is_terminal()               => current,
+        (s,        "system.session_errored") if !s.is_terminal()               => Error,
         (_,        "system.session_orphaned")                                  => Error,
 
         // Signal bridge (System events emitted by SignalPump in Task 8).
