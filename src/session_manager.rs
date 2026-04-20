@@ -4,6 +4,7 @@
 //! Owns the Db, tracks running sessions in-memory, provides spawn/list/get/
 //! kill/handoff/send/subscribe methods for the API and CLI.
 
+use crate::api::events::{DomainEvent, EventBroadcaster};
 use crate::claude_md::{implementation_profile, InjectionPrompt};
 use crate::db::{Db, NewSession, Session};
 use crate::error::{Error, Result};
@@ -36,10 +37,25 @@ pub struct SessionManager {
     data_dir: PathBuf,
     running: StdMutex<HashMap<Uuid, RunningSession>>,
     mcp_registry: crate::mcp::registry::ToolRegistry,
+    event_bus: EventBroadcaster,
 }
 
 impl SessionManager {
+    /// Backwards-compatible constructor — creates an internal broadcaster
+    /// with a 256-frame buffer. Tests that don't observe events use this.
     pub fn new(db: Db, data_dir: PathBuf) -> Self {
+        // 256-frame buffer is enough headroom for normal dashboard load.
+        // Lagged subscribers drop frames and re-fetch on reconnect (see
+        // EventBroadcaster::publish doc). OperatorPrompt durability is
+        // guaranteed by OperatorPromptRegistry (Task 6), not the broadcast
+        // ring — a dropped frame just delays modal display until a HTTP poll.
+        Self::with_event_bus(db, data_dir, EventBroadcaster::new(256))
+    }
+
+    /// Construct a `SessionManager` with a caller-supplied `EventBroadcaster`.
+    /// Use this when the caller (e.g. the dashboard server in `main.rs`) needs
+    /// to retain a clone of the broadcaster to subscribe or publish independently.
+    pub fn with_event_bus(db: Db, data_dir: PathBuf, event_bus: EventBroadcaster) -> Self {
         match db.reconcile_orphaned_sessions() {
             Ok(0) => {}
             Ok(n) => tracing::info!("reconciled {n} orphaned session(s) to Error on startup"),
@@ -50,7 +66,21 @@ impl SessionManager {
             data_dir,
             running: StdMutex::new(HashMap::new()),
             mcp_registry: crate::mcp::registry::ToolRegistry::build(),
+            event_bus,
         }
+    }
+
+    /// Subscribe to the domain-event stream. Each call returns an independent
+    /// `broadcast::Receiver` — the WS handler in `api::mod` calls this once per
+    /// connected dashboard socket.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<DomainEvent> {
+        self.event_bus.subscribe()
+    }
+
+    /// Publish-side handle to the broadcaster. MCP tool handlers call this to
+    /// emit `OperatorToast` / `OperatorPrompt` / `SessionRoleChanged` events.
+    pub fn event_bus(&self) -> &EventBroadcaster {
+        &self.event_bus
     }
 
     pub fn db(&self) -> &Db {

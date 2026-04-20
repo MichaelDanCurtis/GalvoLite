@@ -40,3 +40,23 @@ async fn broadcaster_serializes_to_tagged_json_frames() {
     assert_eq!(json["level"], "warn");
     assert_eq!(json["session_id"], sid.to_string());
 }
+
+#[tokio::test]
+async fn session_manager_exposes_event_broadcaster() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = galvolite::db::Db::open(dir.path().join("t.sqlite")).unwrap();
+    let bus = galvolite::api::events::EventBroadcaster::new(64);
+    let mgr = std::sync::Arc::new(galvolite::session_manager::SessionManager::with_event_bus(
+        db,
+        dir.path().to_path_buf(),
+        bus.clone(),
+    ));
+    let mut rx = mgr.subscribe_events();
+    bus.publish(galvolite::api::events::DomainEvent::OperatorToast {
+        session_id: uuid::Uuid::new_v4(),
+        level: "info".into(),
+        message: "hi".into(),
+    });
+    let evt = rx.recv().await.unwrap();
+    assert!(matches!(evt, galvolite::api::events::DomainEvent::OperatorToast { .. }));
+}
