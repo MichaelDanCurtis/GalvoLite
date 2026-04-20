@@ -284,6 +284,11 @@ async fn handle_terminal_ws(
     // so the writer half lives behind an Arc<Mutex<_>>. Each send takes
     // the lock briefly; contention is negligible because both producers
     // are bursty.
+    //
+    // TODO(plan-4 follow-up): Sink mutex is held across send().await in both
+    // the writer and event_forwarder branches. Under client backpressure this
+    // serializes both producers and risks broadcast lag. Consider moving to a
+    // single writer task draining an mpsc<Message> funnel.
     let sink = std::sync::Arc::new(tokio::sync::Mutex::new(sink));
 
     // Side channel: reader → writer, used to deliver fresh server-side
@@ -362,17 +367,26 @@ async fn handle_terminal_ws(
     let mut event_rx = mgr.subscribe_events();
     let sink_for_events = sink.clone();
     let event_forwarder = async move {
-        while let Ok(evt) = event_rx.recv().await {
-            if !evt.applies_to(session_id) {
-                continue;
-            }
-            let json = match serde_json::to_string(&evt) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let mut s = sink_for_events.lock().await;
-            if s.send(Message::Text(json)).await.is_err() {
-                break;
+        loop {
+            match event_rx.recv().await {
+                Ok(evt) => {
+                    if !evt.applies_to(session_id) {
+                        continue;
+                    }
+                    let json = match serde_json::to_string(&evt) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "domain event serialization failed; dropping frame");
+                            continue;
+                        }
+                    };
+                    let mut s = sink_for_events.lock().await;
+                    if s.send(Message::Text(json)).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
     };
