@@ -41,9 +41,12 @@ impl OperatorPromptRegistry {
     /// elapses. Returns `{answer, timed_out}` JSON either way — the MCP tool
     /// layer passes this straight through to `ToolOutcome::Ok`.
     ///
-    /// TODO(plan-4 follow-up): if the awaiting future is dropped (e.g. the
-    /// MCP client disconnects mid-call) the `waiters` entry leaks until a
-    /// late answer arrives. Not exercised by current tests.
+    // TODO(plan-4 follow-up): If this ask_operator future is dropped before
+    // register_and_wait resolves (e.g. MCP client disconnect), the waiters-map
+    // entry leaks indefinitely. Fix by wrapping the map insertion in a RAII
+    // guard whose Drop removes the entry — e.g., a `PromptGuard { reg, id }`
+    // that synchronously removes on drop. Combining with the Issue 1 race fix
+    // gives a single authoritative ownership model for prompt_id lifetime.
     pub async fn register_and_wait(
         &self,
         bus: &EventBroadcaster,
@@ -53,7 +56,7 @@ impl OperatorPromptRegistry {
         timeout_secs: Option<u64>,
     ) -> serde_json::Value {
         let prompt_id = Uuid::new_v4();
-        let (tx, rx) = oneshot::channel();
+        let (tx, mut rx) = oneshot::channel();
         self.waiters.lock().await.insert(prompt_id, tx);
         bus.publish(DomainEvent::OperatorPrompt {
             prompt_id,
@@ -63,11 +66,25 @@ impl OperatorPromptRegistry {
             timeout_secs,
         });
         let dur = std::time::Duration::from_secs(timeout_secs.unwrap_or(30));
-        match tokio::time::timeout(dur, rx).await {
+        let result = tokio::time::timeout(dur, &mut rx).await;
+        match result {
             Ok(Ok(v)) => v,
             _ => {
-                self.waiters.lock().await.remove(&prompt_id);
-                serde_json::json!({ "answer": serde_json::Value::Null, "timed_out": true })
+                // Either elapsed, or the sender was dropped without sending.
+                // Atomic race resolution: if the waiter is still registered,
+                // it's a genuine timeout. If not, a concurrent answer() raced
+                // us; drain rx non-blockingly to recover the value it sent.
+                let removed = self.waiters.lock().await.remove(&prompt_id).is_some();
+                if removed {
+                    serde_json::json!({ "answer": serde_json::Value::Null, "timed_out": true })
+                } else {
+                    match rx.try_recv() {
+                        Ok(v) => v,
+                        Err(_) => {
+                            serde_json::json!({ "answer": serde_json::Value::Null, "timed_out": true })
+                        }
+                    }
+                }
             }
         }
     }
