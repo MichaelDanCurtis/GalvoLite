@@ -10,16 +10,34 @@ interface OperatorPromptModalProps {
 
 export function OperatorPromptModal({ prompt, onAnswer }: OperatorPromptModalProps) {
   const [draft, setDraft] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const hasChoices = Array.isArray(prompt.choices) && prompt.choices.length > 0;
+
+  const handleAnswer = async (value: string) => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      await onAnswer(prompt.prompt_id, value);
+    } catch {
+      // Parent handles errors; re-enable so user can retry if the modal survives.
+      setSubmitting(false);
+    }
+    // On success parent unmounts the modal, so state reset is unnecessary.
+  };
 
   return (
     <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center">
-      <div className="bg-neutral-900 border border-neutral-700 rounded-lg p-6 min-w-[360px] max-w-[560px] shadow-2xl">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="op-prompt-question"
+        className="bg-neutral-900 border border-neutral-700 rounded-lg p-6 min-w-[360px] max-w-[560px] shadow-2xl"
+      >
         <div className="mb-3 text-xs text-neutral-500">
           Session {prompt.session_id.slice(0, 8)}
         </div>
 
-        <p className="text-neutral-100 mb-4">{prompt.question}</p>
+        <p id="op-prompt-question" className="text-neutral-100 mb-4">{prompt.question}</p>
 
         {prompt.timeout_secs !== null && (
           <p className="text-xs text-neutral-400 mb-4">
@@ -33,8 +51,9 @@ export function OperatorPromptModal({ prompt, onAnswer }: OperatorPromptModalPro
               <button
                 key={choice}
                 type="button"
-                className="px-4 py-2 rounded bg-neutral-700 hover:bg-neutral-600 text-neutral-100 text-sm"
-                onClick={() => onAnswer(prompt.prompt_id, choice)}
+                className="px-4 py-2 rounded bg-neutral-700 hover:bg-neutral-600 text-neutral-100 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                disabled={submitting}
+                onClick={() => handleAnswer(choice)}
               >
                 {choice}
               </button>
@@ -50,8 +69,8 @@ export function OperatorPromptModal({ prompt, onAnswer }: OperatorPromptModalPro
             <button
               type="button"
               className="px-4 py-2 rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm self-end"
-              disabled={draft.trim() === ""}
-              onClick={() => onAnswer(prompt.prompt_id, draft)}
+              disabled={draft.trim() === "" || submitting}
+              onClick={() => handleAnswer(draft)}
             >
               Submit
             </button>

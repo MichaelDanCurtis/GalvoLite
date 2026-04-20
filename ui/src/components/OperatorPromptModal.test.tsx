@@ -30,4 +30,15 @@ describe("OperatorPromptModal", () => {
     />);
     expect(screen.getByRole("button", { name: /submit/i })).toBeDisabled();
   });
+  it("double-clicking a choice button only fires onAnswer once", () => {
+    const onAnswer = vi.fn().mockResolvedValue(undefined);
+    render(<OperatorPromptModal
+      prompt={{ prompt_id:"p1", session_id:"s1", question:"go?", choices:["yes","no"], timeout_secs:60 }}
+      onAnswer={onAnswer}
+    />);
+    const yesBtn = screen.getByRole("button", { name: "yes" });
+    fireEvent.click(yesBtn);
+    fireEvent.click(yesBtn);
+    expect(onAnswer).toHaveBeenCalledTimes(1);
+  });
 });

@@ -24,8 +24,13 @@ export default function App() {
             timeout_secs: prompt.timeout_secs,
           }}
           onAnswer={async (id, answer) => {
-            await api.answerOperatorPrompt(id, answer);
-            setPrompt(null);
+            try {
+              await api.answerOperatorPrompt(id, answer);
+            } catch (err) {
+              console.error("operator prompt answer failed:", err);
+            } finally {
+              setPrompt(null);
+            }
           }}
         />
       )}

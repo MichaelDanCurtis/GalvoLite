@@ -119,6 +119,6 @@ pub async fn answer(
     mgr.operator_registry()
         .answer(prompt_id, body.answer)
         .await
-        .map(|_| StatusCode::OK)
+        .map(|_| StatusCode::NO_CONTENT)
         .map_err(|_| StatusCode::NOT_FOUND)
 }

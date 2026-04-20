@@ -54,7 +54,7 @@ async fn ask_operator_resolves_when_http_answer_lands() {
         ))
         .unwrap();
     let resp = app_for_answer.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
     // The MCP call should now resolve with answer:"yes". The transport
     // stringifies the tool's inner JSON into `content[0].text`, so we parse
