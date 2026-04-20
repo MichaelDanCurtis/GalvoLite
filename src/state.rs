@@ -278,6 +278,11 @@ fn transition(current: SessionState, kind: &str) -> SessionState {
         (Working,        "system.stop_max_retries")  => Idle,
         (Idle,           "system.awaiting_input")    => AwaitingInput,
 
+        // Observation hooks (Sub-plan 2 Task 9). PostToolUse(Bash) for
+        // `git push` raises attention via `system.attention_needed`; the
+        // hook itself doesn't transition state.
+        (s,              "system.attention_needed")  if !s.is_terminal() => NeedsAttention,
+
         // Everything else logs but doesn't change state. Includes:
         //  - signal.HANDOFF:READY / HANDOFF:BLOCKED / PLAN:READY / SEED:NEW /
         //    ROLE:SET / ATTENTION:CONTEXT — model-side annotations
