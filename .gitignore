@@ -23,6 +23,9 @@ Cargo.lock.bak
 # Git worktrees
 .worktrees/
 
+# superpowers skills scratch (brainstorm/plan working dirs)
+.superpowers/
+
 # Frontend
 ui/node_modules/
 ui/dist/
