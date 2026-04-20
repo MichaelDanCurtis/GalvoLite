@@ -228,13 +228,19 @@ pub fn apply_event(
     // `kind` so the funnel stays declarative (mirrors `transition` above).
     apply_column_side_effects(&tx, session_id, &input)?;
 
-    // For terminal next_states, stamp ended_at if not already set. This
-    // moves the lifecycle close into the same transaction as the state
-    // update (spec §8.3 atomicity).
+    // For terminal next_states, stamp ended_at if not already set AND revoke
+    // the API token (spec §7.2: the per-session bearer is invalidated the
+    // moment a session reaches a terminal state, so any in-flight curl with
+    // a stale token gets 401). Both updates land in the same transaction as
+    // the state change (spec §8.3 atomicity).
     if matches!(next, SessionState::Ended | SessionState::Error) {
         tx.execute(
             "UPDATE sessions SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
              WHERE id = ?1 AND ended_at IS NULL",
+            [session_id.to_string()],
+        )?;
+        tx.execute(
+            "UPDATE sessions SET api_token = NULL WHERE id = ?1",
             [session_id.to_string()],
         )?;
     }
