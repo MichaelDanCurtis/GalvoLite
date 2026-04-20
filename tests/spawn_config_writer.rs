@@ -40,6 +40,53 @@ fn writes_settings_json_with_seven_hook_entries() {
 }
 
 #[test]
+fn writes_claude_code_compatible_hook_shape() {
+    // Regression guard: the installer previously emitted
+    // `{command, args, tool}` at the entry level, which Claude Code rejects
+    // with "hooks validation failed" on every host-CLI startup. The correct
+    // shape is `{matcher?, hooks: [{type: "command", command: "..."}]}`.
+    let tmp = TempDir::new().unwrap();
+    spawn_config::write_settings_json(tmp.path(), "/path with spaces/galvolite-hook").unwrap();
+
+    let v: Value = serde_json::from_str(
+        &std::fs::read_to_string(tmp.path().join(".claude/settings.json")).unwrap(),
+    )
+    .unwrap();
+    let hooks = &v["hooks"];
+
+    for kind in [
+        "SessionStart",
+        "SessionEnd",
+        "PreCompact",
+        "Stop",
+        "UserPromptSubmit",
+        "Notification",
+    ] {
+        let entry = &hooks[kind][0];
+        assert!(entry.get("args").is_none(), "{kind}: stale `args` key present");
+        assert!(entry.get("tool").is_none(), "{kind}: stale `tool` key present");
+        let inner = entry["hooks"][0].as_object().unwrap_or_else(|| {
+            panic!("{kind}: missing inner hooks[0] object; got: {entry}")
+        });
+        assert_eq!(inner["type"], "command", "{kind}: inner type must be 'command'");
+        let cmd = inner["command"].as_str().unwrap();
+        assert!(cmd.contains("galvolite-hook"), "{kind}: binary missing: {cmd}");
+        assert!(cmd.ends_with(&format!(" {kind}")), "{kind}: hook-type arg missing: {cmd}");
+        // Spaces in the bin path must be shell-quoted.
+        assert!(
+            cmd.starts_with('\''),
+            "{kind}: command not shell-quoted (spaces would break): {cmd}"
+        );
+    }
+
+    // PostToolUse must carry matcher: "Bash" (Claude Code's way of scoping
+    // a tool-gated hook).
+    let post = &hooks["PostToolUse"][0];
+    assert_eq!(post["matcher"], "Bash", "PostToolUse missing matcher: Bash");
+    assert!(post.get("tool").is_none(), "PostToolUse still uses stale `tool` key");
+}
+
+#[test]
 fn writes_into_subdir_creating_it_if_missing() {
     let tmp = TempDir::new().unwrap();
     // No .claude dir yet

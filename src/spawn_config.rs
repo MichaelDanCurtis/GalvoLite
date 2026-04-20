@@ -30,8 +30,41 @@ pub fn resolve_hook_binary() -> std::io::Result<PathBuf> {
     Ok(dir.join("galvolite-hook"))
 }
 
+/// Shell-quote `bin` for safe inclusion in a `command` string. Claude Code
+/// runs `hooks[*].command` via a shell, so paths containing spaces (the
+/// common case on macOS with `/Volumes/Main External/...`) must be quoted.
+/// Uses POSIX single-quoting: wrap in `'…'` and escape embedded `'` as
+/// `'\''`.
+fn shell_quote(bin: &str) -> String {
+    let escaped = bin.replace('\'', "'\\''");
+    format!("'{escaped}'")
+}
+
+fn hook_entry(bin: &str, kind: &str) -> serde_json::Value {
+    json!({
+        "hooks": [
+            { "type": "command", "command": format!("{} {kind}", shell_quote(bin)) }
+        ]
+    })
+}
+
+fn hook_entry_matcher(bin: &str, kind: &str, matcher: &str) -> serde_json::Value {
+    json!({
+        "matcher": matcher,
+        "hooks": [
+            { "type": "command", "command": format!("{} {kind}", shell_quote(bin)) }
+        ]
+    })
+}
+
 /// Write `<worktree>/.claude/settings.json` with all seven hook entries
 /// dispatching to `hook_bin`. Overwrites any existing file.
+///
+/// Emits Claude Code's documented hook shape:
+/// `"<Kind>": [{ "matcher"?: str, "hooks": [{"type": "command", "command": "..." }] }]`
+/// — the `{command, args, tool}` shape an earlier draft wrote is NOT what
+/// Claude Code parses; it makes every hook type fail validation on startup
+/// and poisons the host CLI until settings.json is removed or rewritten.
 pub fn write_settings_json(
     worktree: &Path,
     hook_bin: impl AsRef<str>,
@@ -42,13 +75,13 @@ pub fn write_settings_json(
     let bin = hook_bin.as_ref();
     let body = json!({
         "hooks": {
-            "SessionStart":     [{"command": bin, "args": ["SessionStart"]}],
-            "SessionEnd":       [{"command": bin, "args": ["SessionEnd"]}],
-            "PreCompact":       [{"command": bin, "args": ["PreCompact"]}],
-            "Stop":             [{"command": bin, "args": ["Stop"]}],
-            "UserPromptSubmit": [{"command": bin, "args": ["UserPromptSubmit"]}],
-            "PostToolUse":      [{"command": bin, "args": ["PostToolUse"], "tool": "Bash"}],
-            "Notification":     [{"command": bin, "args": ["Notification"]}],
+            "SessionStart":     [hook_entry(bin, "SessionStart")],
+            "SessionEnd":       [hook_entry(bin, "SessionEnd")],
+            "PreCompact":       [hook_entry(bin, "PreCompact")],
+            "Stop":             [hook_entry(bin, "Stop")],
+            "UserPromptSubmit": [hook_entry(bin, "UserPromptSubmit")],
+            "PostToolUse":      [hook_entry_matcher(bin, "PostToolUse", "Bash")],
+            "Notification":     [hook_entry(bin, "Notification")],
         }
     });
 
