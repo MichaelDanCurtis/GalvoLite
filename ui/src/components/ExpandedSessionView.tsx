@@ -8,6 +8,7 @@ import { SessionRail } from "./SessionRail";
 import { RoleBadge } from "./RoleBadge";
 import { EventsTab } from "./EventsTab";
 import { PlanTab } from "./PlanTab";
+import { MetaTab } from "./MetaTab";
 import { TabPanel } from "./TabPanel";
 
 type Tab = "terminal" | "events" | "plan" | "meta";
@@ -215,7 +216,9 @@ export function ExpandedSessionView({
               </TabPanel>
             )}
             {tab === "meta" && (
-              <div data-testid="tab-panel-meta" className="p-4 text-sm text-neutral-400">Meta — coming in Task 15</div>
+              <div data-testid="tab-panel-meta" className="flex-1 min-h-0 h-full">
+                <MetaTab session={session} />
+              </div>
             )}
           </div>
           <SessionRail
