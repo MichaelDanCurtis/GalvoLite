@@ -221,3 +221,21 @@ pub fn seed_session_in_state_at(
     force_state(db, sid, state);
     (sid, token)
 }
+
+/// Post a pre-built JSON-RPC envelope to `/mcp` with the given bearer token
+/// and return the parsed JSON response. Sub-plan 4 tests use this when they
+/// need to hand-craft the envelope (e.g. to spawn the request on one task
+/// and fulfill it from another).
+pub async fn rpc(app: axum::Router, token: &str, body: Value) -> Value {
+    let req = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}

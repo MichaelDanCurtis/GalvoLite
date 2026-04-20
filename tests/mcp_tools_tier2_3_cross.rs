@@ -244,7 +244,11 @@ async fn send_to_session_writes_event_targeting_other_session() {
 }
 
 #[tokio::test]
-async fn ask_operator_returns_timed_out_immediately_in_degraded_mode() {
+async fn ask_operator_times_out_when_no_operator_answers() {
+    // Task 6 replaced the degraded-mode short-circuit with a real live wait
+    // backed by OperatorPromptRegistry. With no operator posting an answer,
+    // the call resolves after `timeout_secs` with `{answer:null,
+    // timed_out:true}` — no `degraded` flag anymore.
     let setup = common::test_app();
     let (_sid, token) = common::seed_session_in_state_at(
         &setup.db,
@@ -252,26 +256,21 @@ async fn ask_operator_returns_timed_out_immediately_in_degraded_mode() {
         SessionState::Working,
     );
 
-    let start = std::time::Instant::now();
     let r = call(
         setup.app,
         &token,
         "ask_operator",
-        json!({ "question": "approve?", "timeout_secs": 60 }),
+        json!({ "question": "approve?", "timeout_secs": 1 }),
     )
     .await;
-    let elapsed = start.elapsed();
-
-    assert!(
-        elapsed.as_secs() < 2,
-        "degraded mode must return immediately, took {:?}",
-        elapsed
-    );
 
     let body = inner_text(&r);
     assert!(body["answer"].is_null());
     assert_eq!(body["timed_out"], true);
-    assert_eq!(body["degraded"], true);
+    assert!(
+        body.get("degraded").is_none(),
+        "`degraded` flag was removed in Task 6: {body}"
+    );
 }
 
 #[tokio::test]

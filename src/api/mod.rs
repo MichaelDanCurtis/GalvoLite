@@ -6,6 +6,7 @@
 pub mod events;
 pub mod hook_handlers;
 pub mod hooks;
+pub mod operator;
 
 use crate::session_manager::SessionManager;
 use axum::extract::{Path, State};
@@ -32,6 +33,7 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route("/api/sessions/:id/terminal", get(terminal_ws))
         .route("/api/fs/list", get(list_directory))
         .route("/hooks/ingest", post(hooks::ingest))
+        .route("/operator/prompt/:id/answer", post(operator::answer))
         .route("/mcp", post(crate::mcp::transport::handle))
         .layer(CorsLayer::permissive())
         .with_state(mgr);

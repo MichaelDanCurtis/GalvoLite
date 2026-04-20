@@ -5,6 +5,7 @@
 //! kill/handoff/send/subscribe methods for the API and CLI.
 
 use crate::api::events::{DomainEvent, EventBroadcaster};
+use crate::api::operator::OperatorPromptRegistry;
 use crate::claude_md::{implementation_profile, InjectionPrompt};
 use crate::db::{Db, NewSession, Session};
 use crate::error::{Error, Result};
@@ -38,6 +39,11 @@ pub struct SessionManager {
     running: StdMutex<HashMap<Uuid, RunningSession>>,
     mcp_registry: crate::mcp::registry::ToolRegistry,
     event_bus: EventBroadcaster,
+    /// In-memory map of pending `ask_operator` prompts. The MCP handler
+    /// parks on a oneshot keyed by a fresh `prompt_id`; the
+    /// `POST /operator/prompt/:id/answer` route resolves it. Kept on the
+    /// SessionManager so both callers share the same pending-map.
+    operator_registry: Arc<OperatorPromptRegistry>,
 }
 
 impl SessionManager {
@@ -67,7 +73,15 @@ impl SessionManager {
             running: StdMutex::new(HashMap::new()),
             mcp_registry: crate::mcp::registry::ToolRegistry::build(),
             event_bus,
+            operator_registry: OperatorPromptRegistry::new(),
         }
+    }
+
+    /// Shared handle to the `ask_operator` pending-prompt registry. The MCP
+    /// handler calls `register_and_wait`; the HTTP answer route calls
+    /// `answer`. Both go through this one Arc.
+    pub fn operator_registry(&self) -> &Arc<OperatorPromptRegistry> {
+        &self.operator_registry
     }
 
     /// Subscribe to the domain-event stream. Each call returns an independent
