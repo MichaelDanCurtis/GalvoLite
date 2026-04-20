@@ -591,6 +591,155 @@ impl Db {
         Ok((tx.last_insert_rowid(), false))
     }
 
+    /// Set the per-session bearer token. Used at spawn time + on reattach.
+    /// Returns `Error::SessionNotFound` if no row was updated.
+    pub fn set_api_token(&self, id: Uuid, token: &str) -> Result<()> {
+        let conn = self.pool.get()?;
+        let rows = conn.execute(
+            "UPDATE sessions SET api_token = ?1 WHERE id = ?2",
+            params![token, id.to_string()],
+        )?;
+        if rows == 0 {
+            return Err(Error::SessionNotFound(id));
+        }
+        Ok(())
+    }
+
+    /// Clear the per-session bearer token (revoke it). Called when a session
+    /// transitions to Ended so stale curl attempts get 401.
+    pub fn clear_api_token(&self, id: Uuid) -> Result<()> {
+        let conn = self.pool.get()?;
+        conn.execute(
+            "UPDATE sessions SET api_token = NULL WHERE id = ?1",
+            params![id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Return `(session_id, api_token)` for every session that currently has
+    /// a non-NULL token. Used by `auth::resolve_token` to do constant-time
+    /// matching across all candidates.
+    pub fn sessions_with_tokens(&self) -> Result<Vec<(Uuid, String)>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, api_token FROM sessions WHERE api_token IS NOT NULL",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                let id_s: String = r.get(0)?;
+                let token: String = r.get(1)?;
+                Ok((parse_uuid(&id_s)?, token))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Update one of the markdown columns on a session row. Used by MCP tools
+    /// `set_plan` and `set_seed` to persist the latest body alongside an event
+    /// row. Returns `Error::SessionNotFound` if no row was updated.
+    pub fn set_session_markdown(&self, id: Uuid, column: &str, body: &str) -> Result<()> {
+        // Whitelist columns to keep this from being a SQLi vector.
+        let col = match column {
+            "plan_markdown" => "plan_markdown",
+            "seed_markdown" => "seed_markdown",
+            other => {
+                return Err(Error::Config(format!(
+                    "set_session_markdown: unknown column {other}"
+                )))
+            }
+        };
+        let conn = self.pool.get()?;
+        let sql = format!("UPDATE sessions SET {col} = ?1 WHERE id = ?2");
+        let rows = conn.execute(&sql, params![body, id.to_string()])?;
+        if rows == 0 {
+            return Err(Error::SessionNotFound(id));
+        }
+        Ok(())
+    }
+
+    /// Update the `handoff_path` column on a session row.
+    pub fn set_session_handoff_path(&self, id: Uuid, path: &str) -> Result<()> {
+        let conn = self.pool.get()?;
+        let rows = conn.execute(
+            "UPDATE sessions SET handoff_path = ?1 WHERE id = ?2",
+            params![path, id.to_string()],
+        )?;
+        if rows == 0 {
+            return Err(Error::SessionNotFound(id));
+        }
+        Ok(())
+    }
+
+    /// Read the most recent `limit` event rows for a session, optionally
+    /// filtered to events with `id > since`. Returned as JSON values shaped
+    /// for the MCP `read_events` tool response.
+    pub fn read_events_for_session(
+        &self,
+        session_id: Uuid,
+        since: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<serde_json::Value>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, ts, source, kind, payload_json, prev_state, next_state
+             FROM events
+             WHERE session_id = ?1
+               AND (?2 IS NULL OR ts > ?2)
+             ORDER BY id ASC
+             LIMIT ?3",
+        )?;
+        let rows = stmt
+            .query_map(
+                params![session_id.to_string(), since, limit as i64],
+                |r| {
+                    Ok(serde_json::json!({
+                        "id":         r.get::<_, i64>(0)?,
+                        "ts":         r.get::<_, String>(1)?,
+                        "source":     r.get::<_, String>(2)?,
+                        "kind":       r.get::<_, String>(3)?,
+                        "payload":    serde_json::from_str::<serde_json::Value>(
+                                          &r.get::<_, String>(4)?
+                                      ).unwrap_or(serde_json::Value::Null),
+                        "prev_state": r.get::<_, Option<String>>(5)?,
+                        "next_state": r.get::<_, Option<String>>(6)?,
+                    }))
+                },
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Look up sibling sessions of a given session (same project), excluding
+    /// the caller. Returns lightweight rows for the MCP `list_siblings` tool.
+    pub fn list_session_siblings(
+        &self,
+        project_id: Uuid,
+        exclude: Option<Uuid>,
+    ) -> Result<Vec<serde_json::Value>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, role, state, last_event_ts
+             FROM sessions
+             WHERE project_id = ?1
+               AND (?2 IS NULL OR id != ?2)
+             ORDER BY created_at ASC",
+        )?;
+        let rows = stmt
+            .query_map(
+                params![project_id.to_string(), exclude.map(|u| u.to_string())],
+                |r| {
+                    Ok(serde_json::json!({
+                        "id":            r.get::<_, String>(0)?,
+                        "role":          r.get::<_, String>(1)?,
+                        "state":         r.get::<_, String>(2)?,
+                        "last_event_ts": r.get::<_, Option<String>>(3)?,
+                    }))
+                },
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     pub fn record_signal(
         &self,
         session_id: Uuid,
