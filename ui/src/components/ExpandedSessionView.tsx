@@ -227,6 +227,7 @@ export function ExpandedSessionView({
             onHandoff={onHandoff}
             onEnd={onEnd}
             onToggleAutopilot={onToggleAutopilot}
+            onOpenEvents={() => setTab("events")}
           />
         </div>
       </motion.div>

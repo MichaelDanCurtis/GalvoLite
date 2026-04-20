@@ -10,6 +10,7 @@ describe("SessionRail", () => {
     onHandoff: vi.fn(),
     onToggleAutopilot: vi.fn(),
     onEnd: vi.fn(),
+    onOpenEvents: vi.fn(),
   };
 
   it("renders four action icons", () => {
@@ -40,5 +41,12 @@ describe("SessionRail", () => {
     render(<SessionRail {...baseProps} />);
     await userEvent.click(screen.getByRole("button", { name: /expand rail/i }));
     expect(screen.getByText(/End session/)).toBeInTheDocument();
+  });
+
+  it("emits onOpenEvents when Event log button clicked", async () => {
+    const onOpenEvents = vi.fn();
+    render(<SessionRail {...baseProps} onOpenEvents={onOpenEvents} />);
+    await userEvent.click(screen.getByRole("button", { name: /event log/i }));
+    expect(onOpenEvents).toHaveBeenCalledOnce();
   });
 });
