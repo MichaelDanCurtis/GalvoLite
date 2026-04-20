@@ -51,8 +51,10 @@ async fn rpc_live(client: &reqwest::Client, base: &str, token: &str, body: Value
 /// Extract the inner JSON payload from `content[0].text` in a `tools/call`
 /// MCP response envelope.
 fn inner_text(r: &Value) -> Value {
-    serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap())
-        .expect("inner_text: content[0].text is not a JSON string")
+    let text = r["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("inner_text: result.content[0].text missing or not a string; full response: {r}"));
+    serde_json::from_str(text).expect("inner_text: content[0].text is not a JSON string")
 }
 
 #[tokio::test]
