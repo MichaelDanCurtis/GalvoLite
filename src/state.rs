@@ -179,8 +179,18 @@ pub fn apply_event(
         });
     }
 
-    // 3. Compute next state from (current, kind).
-    let next = transition(current, &input.kind);
+    // 3. Compute next state from (current, kind). For payload-sensitive
+    // events (currently `mcp.status_report`) override the table result based
+    // on the payload's discriminator. Keeps the declarative arm count low.
+    let mut next = transition(current, &input.kind);
+    if input.kind == "mcp.status_report" && !current.is_terminal() {
+        match input.payload.get("kind").and_then(|v| v.as_str()) {
+            Some("blocked") => next = SessionState::NeedsAttention,
+            Some("complete") => next = SessionState::Idle,
+            Some("working") => next = SessionState::Working,
+            _ => {}
+        }
+    }
 
     // 4. Append events row (or short-circuit on dedup hit).
     let payload_str = serde_json::to_string(&input.payload)?;
@@ -213,6 +223,11 @@ pub fn apply_event(
         rusqlite::params![next.to_string(), session_id.to_string()],
     )?;
 
+    // 5a. Side-effect column writes that must land in the same transaction
+    // as the event row to preserve §8.3 atomicity. Each branch is keyed off
+    // `kind` so the funnel stays declarative (mirrors `transition` above).
+    apply_column_side_effects(&tx, session_id, &input)?;
+
     // For terminal next_states, stamp ended_at if not already set. This
     // moves the lifecycle close into the same transaction as the state
     // update (spec §8.3 atomicity).
@@ -231,6 +246,69 @@ pub fn apply_event(
         next_state: next,
         deduped: false,
     })
+}
+
+/// In-transaction column writes that piggy-back on the event funnel. Reads
+/// the relevant fields out of `input.payload` and updates the appropriate
+/// session column. Unrecognized kinds are no-ops.
+fn apply_column_side_effects(
+    tx: &rusqlite::Transaction<'_>,
+    session_id: uuid::Uuid,
+    input: &EventInput,
+) -> Result<()> {
+    let sid = session_id.to_string();
+    match input.kind.as_str() {
+        "mcp.set_plan" => {
+            if let Some(md) = input.payload.get("markdown").and_then(|v| v.as_str()) {
+                tx.execute(
+                    "UPDATE sessions SET plan_markdown = ?1 WHERE id = ?2",
+                    rusqlite::params![md, sid],
+                )?;
+            }
+        }
+        "mcp.set_seed" => {
+            if let Some(md) = input.payload.get("markdown").and_then(|v| v.as_str()) {
+                tx.execute(
+                    "UPDATE sessions SET seed_markdown = ?1 WHERE id = ?2",
+                    rusqlite::params![md, sid],
+                )?;
+            }
+        }
+        "mcp.set_role" => {
+            if let Some(role) = input.payload.get("role").and_then(|v| v.as_str()) {
+                tx.execute(
+                    "UPDATE sessions SET role = ?1 WHERE id = ?2",
+                    rusqlite::params![role, sid],
+                )?;
+            }
+        }
+        "mcp.write_handoff" => {
+            if let Some(p) = input.payload.get("path").and_then(|v| v.as_str()) {
+                tx.execute(
+                    "UPDATE sessions SET handoff_path = ?1 WHERE id = ?2",
+                    rusqlite::params![p, sid],
+                )?;
+            }
+        }
+        "mcp.request_attention" => {
+            if let Some(reason) = input.payload.get("reason").and_then(|v| v.as_str()) {
+                tx.execute(
+                    "UPDATE sessions SET last_status_note = ?1 WHERE id = ?2",
+                    rusqlite::params![reason, sid],
+                )?;
+            }
+        }
+        "mcp.status_report" => {
+            if let Some(note) = input.payload.get("note").and_then(|v| v.as_str()) {
+                tx.execute(
+                    "UPDATE sessions SET last_status_note = ?1 WHERE id = ?2",
+                    rusqlite::params![note, sid],
+                )?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Transition table from spec §8.6 plus signal-bridge rows. Anything not
@@ -289,6 +367,13 @@ fn transition(current: SessionState, kind: &str) -> SessionState {
         // `git push` raises attention via `system.attention_needed`; the
         // hook itself doesn't transition state.
         (s,              "system.attention_needed")  if !s.is_terminal() => NeedsAttention,
+
+        // MCP tools (Sub-plan 3 §5.1 status & lifecycle).
+        // request_attention always escalates (no-op if already NeedsAttention).
+        // mcp.status_report's per-kind state effect is computed in apply_event
+        // because it depends on the payload's `kind` field (declarative-table
+        // arms key only on event kind, not payload).
+        (s, "mcp.request_attention") if !s.is_terminal() => NeedsAttention,
 
         // Everything else logs but doesn't change state. Includes:
         //  - signal.HANDOFF:READY / HANDOFF:BLOCKED / PLAN:READY / SEED:NEW /

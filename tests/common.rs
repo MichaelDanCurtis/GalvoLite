@@ -33,6 +33,42 @@ pub fn test_app() -> TestApp {
     }
 }
 
+/// Force a session into a specific [`galvolite::state::SessionState`] for
+/// tests. Bypasses the event funnel — direct UPDATE.
+pub fn force_state(db: &Db, sid: Uuid, state: galvolite::state::SessionState) {
+    let conn = db.pool().get().unwrap();
+    conn.execute(
+        "UPDATE sessions SET state = ?1 WHERE id = ?2",
+        rusqlite::params![state.to_string(), sid.to_string()],
+    )
+    .unwrap();
+}
+
+/// Read the current `state` column for a session.
+pub fn state_of(db: &Db, sid: Uuid) -> galvolite::state::SessionState {
+    let conn = db.pool().get().unwrap();
+    let s: String = conn
+        .query_row(
+            "SELECT state FROM sessions WHERE id = ?1",
+            [sid.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    s.parse().unwrap()
+}
+
+/// Same as [`seed_session`] but additionally forces the session into the
+/// given state via direct UPDATE.
+pub fn seed_session_in_state(
+    db: &Db,
+    project_dir: &std::path::Path,
+    state: galvolite::state::SessionState,
+) -> (Uuid, String) {
+    let (sid, token) = seed_session(db, project_dir);
+    force_state(db, sid, state);
+    (sid, token)
+}
+
 /// Create a project + session row directly in the DB (no PTY spawn) and
 /// stamp it with `api_token`. Returns the session id and the token.
 pub fn seed_session(db: &Db, project_dir: &std::path::Path) -> (Uuid, String) {
