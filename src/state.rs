@@ -276,6 +276,13 @@ fn transition(current: SessionState, kind: &str) -> SessionState {
         // system.stop_max_retries to flip Working → Idle when the limit
         // is reached.
         (Working,        "system.stop_max_retries")  => Idle,
+        // The 1- and 2-Stop watchdog (turn::on_stop) emits
+        // system.awaiting_input from whatever state the session was in when
+        // Stop arrived — usually Working, sometimes NeedsAttention. Without
+        // these arms the watchdog would no-op (the spawned task spins, fires,
+        // and finds no transition match).
+        (Working,        "system.awaiting_input")    => AwaitingInput,
+        (NeedsAttention, "system.awaiting_input")    => AwaitingInput,
         (Idle,           "system.awaiting_input")    => AwaitingInput,
 
         // Observation hooks (Sub-plan 2 Task 9). PostToolUse(Bash) for
