@@ -31,6 +31,7 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route("/api/sessions/:id/terminal", get(terminal_ws))
         .route("/api/fs/list", get(list_directory))
         .route("/hooks/ingest", post(hooks::ingest))
+        .route("/mcp", post(crate::mcp::transport::handle))
         .layer(CorsLayer::permissive())
         .with_state(mgr);
 

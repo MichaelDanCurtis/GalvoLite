@@ -55,6 +55,9 @@ pub enum Error {
     /// Failed to serialize/deserialize an event payload to JSON.
     #[error("event payload JSON error: {0}")]
     EventPayload(#[from] serde_json::Error),
+
+    #[error("unauthorized")]
+    Unauthorized,
 }
 
 impl Error {

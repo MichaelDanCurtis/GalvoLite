@@ -35,6 +35,7 @@ pub struct SessionManager {
     db: Db,
     data_dir: PathBuf,
     running: StdMutex<HashMap<Uuid, RunningSession>>,
+    mcp_registry: crate::mcp::registry::ToolRegistry,
 }
 
 impl SessionManager {
@@ -48,11 +49,17 @@ impl SessionManager {
             db,
             data_dir,
             running: StdMutex::new(HashMap::new()),
+            mcp_registry: crate::mcp::registry::ToolRegistry::build(),
         }
     }
 
     pub fn db(&self) -> &Db {
         &self.db
+    }
+
+    /// Access the MCP tool registry built at startup.
+    pub fn mcp_registry(&self) -> &crate::mcp::registry::ToolRegistry {
+        &self.mcp_registry
     }
 
     pub fn data_dir(&self) -> &PathBuf {
