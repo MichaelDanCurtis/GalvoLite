@@ -97,6 +97,25 @@ impl SessionManager {
             return Err(e);
         }
 
+        // Write per-session .claude/settings.json so claude code's hook
+        // dispatch table points all seven hooks at our galvolite-hook
+        // binary. The .mcp.json companion is Sub-plan 3's concern.
+        match crate::spawn_config::resolve_hook_binary() {
+            Ok(hook_bin) => {
+                if let Err(e) = crate::spawn_config::write_settings_json(
+                    &worktree,
+                    hook_bin.to_string_lossy().as_ref(),
+                ) {
+                    orphan_session(&self.db, session.id, "settings_json_write_failed");
+                    return Err(Error::io(worktree.join(".claude/settings.json"), e));
+                }
+            }
+            Err(e) => {
+                orphan_session(&self.db, session.id, "hook_binary_resolve_failed");
+                return Err(Error::io(PathBuf::from("galvolite-hook"), e));
+            }
+        }
+
         let cycle_id = self.db.start_cycle(session.id)?;
 
         // PTY spawn. If this fails, session + cycle rows exist but no
