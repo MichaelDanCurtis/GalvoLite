@@ -8,13 +8,14 @@ use crate::mcp::registry::ToolDef;
 pub mod tier1_introspection;
 pub mod tier1_role_handoff;
 pub mod tier1_status;
+pub mod tier2_3_cross;
 
 pub fn all() -> Vec<ToolDef> {
     let mut v = Vec::new();
     v.extend(tier1_status::tools());
     v.extend(tier1_role_handoff::tools());
     v.extend(tier1_introspection::tools());
-    // Task 9 — Tier 2/3 cross-session: v.extend(tier2_3_cross::tools());
+    v.extend(tier2_3_cross::tools());
     // Task 10 — Tier 4 reserved stubs: v.extend(tier4_stubs::tools());
     v
 }

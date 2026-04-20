@@ -381,6 +381,16 @@ fn transition(current: SessionState, kind: &str) -> SessionState {
         (s, "mcp.pause_self")    if !s.is_terminal() => AwaitingInput,
         (_, "mcp.request_end")                       => Ended,
 
+        // MCP tools §5.3/§5.4 cross-session + operator. All logging-only:
+        //  - `mcp.send_to_session` is recorded against the TARGET session so
+        //    it shows in the receiver's event log; the receiver's actual state
+        //    change lands via its own UserPromptSubmit hook (Sub-plan 2).
+        //  - `mcp.ask_operator` / `mcp.notify_operator` are pure side-effects
+        //    in degraded mode (Sub-plan 4 wires the dashboard WS round-trip).
+        (s, "mcp.send_to_session") if !s.is_terminal() => s,
+        (s, "mcp.ask_operator")    if !s.is_terminal() => s,
+        (s, "mcp.notify_operator") if !s.is_terminal() => s,
+
         // Everything else logs but doesn't change state. Includes:
         //  - signal.HANDOFF:READY / HANDOFF:BLOCKED / PLAN:READY / SEED:NEW /
         //    ROLE:SET / ATTENTION:CONTEXT — model-side annotations
