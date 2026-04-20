@@ -29,6 +29,7 @@ export interface Session {
   handoff_path?: string | null;
   turn_count?: number;
   est_tokens?: number;
+  last_event_kind?: string;
 }
 
 export interface SignalRow {
