@@ -375,6 +375,12 @@ fn transition(current: SessionState, kind: &str) -> SessionState {
         // arms key only on event kind, not payload).
         (s, "mcp.request_attention") if !s.is_terminal() => NeedsAttention,
 
+        // MCP tools §5.2 self-control (computed in apply_event for the ones
+        // that need state changes — `mcp.pause_self` → AwaitingInput,
+        // `mcp.request_end` → Ended). Logged-only kinds are listed below.
+        (s, "mcp.pause_self")    if !s.is_terminal() => AwaitingInput,
+        (_, "mcp.request_end")                       => Ended,
+
         // Everything else logs but doesn't change state. Includes:
         //  - signal.HANDOFF:READY / HANDOFF:BLOCKED / PLAN:READY / SEED:NEW /
         //    ROLE:SET / ATTENTION:CONTEXT — model-side annotations
