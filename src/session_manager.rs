@@ -5,7 +5,7 @@
 //! kill/handoff/send/subscribe methods for the API and CLI.
 
 use crate::claude_md::{implementation_profile, InjectionPrompt};
-use crate::db::{Db, NewSession, Session, SessionState};
+use crate::db::{Db, NewSession, Session};
 use crate::error::{Error, Result};
 use crate::handoff::HandoffDir;
 use crate::pty::{CycleSlot, PtyHandle, PtyHandleShared, PtyOpts, Scrollback, SignalPump};
@@ -81,24 +81,19 @@ impl SessionManager {
         let galvolite_dir = worktree.join(".galvolite");
         if let Err(e) = std::fs::create_dir_all(&galvolite_dir) {
             // Filesystem setup failed before start_cycle — only the session
-            // row exists. Close it so it doesn't linger in Spawning.
-            let _ = self
-                .db
-                .end_session_if_unended(session.id, SessionState::Error);
+            // row exists. Route through apply_event so events log records
+            // why this session ended in Error.
+            orphan_session(&self.db, session.id, "galvolite_dir_create_failed");
             return Err(Error::io(&galvolite_dir, e));
         }
         let claude_md_path = galvolite_dir.join("CLAUDE-session.md");
         if let Err(e) = std::fs::write(&claude_md_path, implementation_profile()) {
-            let _ = self
-                .db
-                .end_session_if_unended(session.id, SessionState::Error);
+            orphan_session(&self.db, session.id, "claude_md_write_failed");
             return Err(Error::io(&claude_md_path, e));
         }
         let handoff_dir = HandoffDir::new(galvolite_dir.join("handoffs"));
         if let Err(e) = crate::handoff::ensure_session_dir(&handoff_dir, session.id) {
-            let _ = self
-                .db
-                .end_session_if_unended(session.id, SessionState::Error);
+            orphan_session(&self.db, session.id, "handoff_dir_create_failed");
             return Err(e);
         }
 
@@ -115,9 +110,7 @@ impl SessionManager {
             Ok(p) => p,
             Err(e) => {
                 let _ = self.db.end_cycle_if_unended(cycle_id, None);
-                let _ = self
-                    .db
-                    .end_session_if_unended(session.id, SessionState::Error);
+                orphan_session(&self.db, session.id, "pty_spawn_failed");
                 return Err(e);
             }
         };
@@ -127,9 +120,7 @@ impl SessionManager {
         if let Err(e) = self.db.update_session_pid(session.id, pty.pid as i64) {
             drop(pty);
             let _ = self.db.end_cycle_if_unended(cycle_id, None);
-            let _ = self
-                .db
-                .end_session_if_unended(session.id, SessionState::Error);
+            orphan_session(&self.db, session.id, "update_pid_failed");
             return Err(e);
         }
 
@@ -153,9 +144,7 @@ impl SessionManager {
         if let Err(e) = started {
             handle.kill();
             let _ = self.db.end_cycle_if_unended(cycle_id, None);
-            let _ = self
-                .db
-                .end_session_if_unended(session.id, SessionState::Error);
+            orphan_session(&self.db, session.id, "session_started_event_failed");
             return Err(e);
         }
 
@@ -255,9 +244,11 @@ impl SessionManager {
         {
             handle.kill();
             // Belt-and-braces: actively mark Error in case bg task's drain
-            // races us; conditional writes mean we're a no-op if it already
-            // landed Complete. The bg task still removes the running-map entry.
-            let _ = self.db.end_session_if_unended(session.id, SessionState::Error);
+            // races us. Route through apply_event; the bg task's
+            // system.session_ended will be a no-op once we land Error
+            // (terminal-state guard). The bg task still removes the
+            // running-map entry.
+            orphan_session(&self.db, session.id, "prompt_inject_failed");
             return Err(e);
         }
 
@@ -505,6 +496,25 @@ impl SessionManager {
         };
         Ok(driver.state().await)
     }
+}
+
+/// Route a spawn-failure rollback through `apply_event` so it lands as a
+/// `system.session_orphaned` event in the events log and an `Error`
+/// terminal state on the session — atomically, in one transaction.
+///
+/// All errors are swallowed; the caller is already returning the original
+/// failure and we don't want to mask it with a database error.
+fn orphan_session(db: &Db, session_id: Uuid, reason: &'static str) {
+    let _ = crate::state::apply_event(
+        db,
+        session_id,
+        crate::state::EventInput {
+            source: crate::state::Source::System,
+            kind: "system.session_orphaned".into(),
+            payload: serde_json::json!({ "reason": reason }),
+            dedup_key: Some(format!("session-orphaned:{session_id}")),
+        },
+    );
 }
 
 /// Validate and canonicalize a project path.
