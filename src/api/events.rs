@@ -84,3 +84,22 @@ impl EventBroadcaster {
         self.tx.receiver_count()
     }
 }
+
+impl DomainEvent {
+    /// True if this event is scoped to (or fan-outs to) the given session.
+    /// The dashboard WebSocket uses this to filter the global event bus down
+    /// to the per-session text-frame channel. The match is exhaustive (no
+    /// wildcard arm) so future variants force a compile error here.
+    pub fn applies_to(&self, sid: Uuid) -> bool {
+        match self {
+            DomainEvent::SessionStateChanged { session_id, .. }
+            | DomainEvent::SessionEventAppended { session_id, .. }
+            | DomainEvent::SessionRoleChanged { session_id, .. }
+            | DomainEvent::SessionMetaChanged { session_id, .. }
+            | DomainEvent::SessionPlanReplaced { session_id, .. }
+            | DomainEvent::SessionPlanStepChanged { session_id, .. }
+            | DomainEvent::OperatorPrompt { session_id, .. }
+            | DomainEvent::OperatorToast { session_id, .. } => *session_id == sid,
+        }
+    }
+}

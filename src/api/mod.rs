@@ -278,7 +278,13 @@ async fn handle_terminal_ws(
     use axum::extract::ws::Message;
     use futures_util::{sink::SinkExt, stream::StreamExt};
 
-    let (mut sink, mut stream) = socket.split();
+    let (sink, mut stream) = socket.split();
+    // The sink is shared between the PTY-bytes writer task and the
+    // domain-event forwarder task: both can emit frames asynchronously,
+    // so the writer half lives behind an Arc<Mutex<_>>. Each send takes
+    // the lock briefly; contention is negligible because both producers
+    // are bursty.
+    let sink = std::sync::Arc::new(tokio::sync::Mutex::new(sink));
 
     // Side channel: reader → writer, used to deliver fresh server-side
     // screen snapshots taken AFTER each client-driven resize. We do NOT
@@ -293,20 +299,23 @@ async fn handle_terminal_ws(
     // so the client always lands on a coherent repaint.
     let (snap_tx, mut snap_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
 
+    let sink_for_writer = sink.clone();
     let writer = async move {
         loop {
             tokio::select! {
                 biased;
                 snap = snap_rx.recv() => {
                     let Some(bytes) = snap else { break };
-                    if sink.send(Message::Binary(bytes)).await.is_err() {
+                    let mut s = sink_for_writer.lock().await;
+                    if s.send(Message::Binary(bytes)).await.is_err() {
                         break;
                     }
                 }
                 msg = rx.recv() => {
                     match msg {
                         Ok(bytes) => {
-                            if sink.send(Message::Binary(bytes)).await.is_err() {
+                            let mut s = sink_for_writer.lock().await;
+                            if s.send(Message::Binary(bytes)).await.is_err() {
                                 break;
                             }
                         }
@@ -346,9 +355,36 @@ async fn handle_terminal_ws(
         }
     };
 
+    // Domain-event forwarder: subscribe to the per-process event bus,
+    // filter to events scoped to this session, serialize each as JSON,
+    // and emit on the shared sink as a `Message::Text` frame. PTY bytes
+    // (binary) and domain events (text) thus share one socket.
+    let mut event_rx = mgr.subscribe_events();
+    let sink_for_events = sink.clone();
+    let event_forwarder = async move {
+        while let Ok(evt) = event_rx.recv().await {
+            if !evt.applies_to(session_id) {
+                continue;
+            }
+            let json = match serde_json::to_string(&evt) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let mut s = sink_for_events.lock().await;
+            if s.send(Message::Text(json)).await.is_err() {
+                break;
+            }
+        }
+    };
+
+    // When any of the three tasks ends (writer drained, reader observed
+    // close, or event channel dropped), the others are dropped as well —
+    // `tokio::select!` cancels the losing futures, releasing the sink
+    // and the broadcast receivers. No background task leaks per WS.
     tokio::select! {
         _ = writer => {},
         _ = reader => {},
+        _ = event_forwarder => {},
     }
 }
 
