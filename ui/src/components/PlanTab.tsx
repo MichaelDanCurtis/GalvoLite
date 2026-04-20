@@ -5,24 +5,21 @@ interface Props {
 }
 
 /**
- * Status → glyph map per Sub-plan 4 Task 14:
+ * Status → {glyph, className} map per Sub-plan 4 Task 14:
  *   pending  → ○
  *   working  → ◐
  *   done     → ●
  *   blocked  → ◆
+ *
+ * Kept as a single record (rather than two parallel `Record<PlanStepStatus,
+ * …>` objects) so a new status can't be added to one table and forgotten in
+ * the other.
  */
-const STATUS_GLYPH: Record<PlanStepStatus, string> = {
-  pending: "\u25CB",
-  working: "\u25D0",
-  done:    "\u25CF",
-  blocked: "\u25C6",
-};
-
-const STATUS_CLASS: Record<PlanStepStatus, string> = {
-  pending: "text-neutral-500",
-  working: "text-blue-300",
-  done:    "text-green-400",
-  blocked: "text-red-400",
+const STATUS_META: Record<PlanStepStatus, { glyph: string; className: string }> = {
+  pending: { glyph: "\u25CB", className: "text-neutral-500" },
+  working: { glyph: "\u25D0", className: "text-blue-300" },
+  done:    { glyph: "\u25CF", className: "text-green-400" },
+  blocked: { glyph: "\u25C6", className: "text-red-400" },
 };
 
 /**
@@ -83,7 +80,7 @@ export function PlanTab({ steps }: Props) {
 }
 
 function StepRow({ step, current }: { step: PlanStep; current: boolean }) {
-  const glyph = STATUS_GLYPH[step.status];
+  const { glyph, className } = STATUS_META[step.status];
   return (
     <li
       data-testid={`step-${step.hash}`}
@@ -94,7 +91,7 @@ function StepRow({ step, current }: { step: PlanStep; current: boolean }) {
     >
       <span
         aria-label={step.status}
-        className={`font-mono ${STATUS_CLASS[step.status]}`}
+        className={`font-mono ${className}`}
       >
         {glyph}
       </span>

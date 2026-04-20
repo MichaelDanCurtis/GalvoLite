@@ -283,6 +283,8 @@ async fn get_events(
 /// dashboard's Plan tab, ordered by ordinal ASC. Row shape: `{ hash, text,
 /// status, note }` matching the UI `PlanStep` type. Status `in_progress` is
 /// rewritten to `working` by the DB helper so the wire shape is UI-native.
+///
+/// No pagination: plan_steps per session is small by design (dozens at most).
 async fn get_plan_steps(
     State(mgr): State<AppState>,
     Path(id): Path<uuid::Uuid>,

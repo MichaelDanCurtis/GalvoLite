@@ -8,6 +8,7 @@ import { SessionRail } from "./SessionRail";
 import { RoleBadge } from "./RoleBadge";
 import { EventsTab } from "./EventsTab";
 import { PlanTab } from "./PlanTab";
+import { TabPanel } from "./TabPanel";
 
 type Tab = "terminal" | "events" | "plan" | "meta";
 
@@ -120,7 +121,21 @@ export function ExpandedSessionView({
       if (e.session_id !== session.id) return;
       setPlanSteps((prev) => {
         const idx = prev.findIndex((s) => s.hash === e.step_hash);
-        if (idx === -1) return prev; // no-op: step not in current view
+        if (idx === -1) {
+          // TODO(sub-plan-5): race — `plan_step_changed` for a step not yet in
+          // `planSteps` is silently dropped. Real path today: initial fetch
+          // resolves AFTER the event arrives, and the fetch's snapshot
+          // includes the row, so the state reconciles. But if a NEW step is
+          // appended AFTER the fetch resolves and before we subscribe (or
+          // during a reconnect window), the update will be lost until the
+          // next `plan_replaced`. Sub-plan 5's `plan_check_step` writer
+          // should either: (a) always accompany each `plan_step_changed`
+          // with an implied `plan_replaced` on first reference, or (b) this
+          // component should refetch `plan_steps` on unknown-hash updates.
+          // Not fixing in Sub-plan 4 because the writer shape is still
+          // unconfirmed.
+          return prev;
+        }
         const next = prev.slice();
         next[idx] = {
           ...prev[idx],
@@ -180,32 +195,24 @@ export function ExpandedSessionView({
               <TerminalPreview sessionId={session.id} readOnly={session.autopilot} />
             )}
             {tab === "events" && (
-              <div data-testid="tab-panel-events" className="h-full overflow-hidden">
-                {events.length === 0 && loadError ? (
-                  <div
-                    data-testid="events-error"
-                    className="p-4 text-sm text-red-400"
-                  >
-                    Could not load events
-                  </div>
-                ) : (
-                  <EventsTab events={events} />
-                )}
-              </div>
+              <TabPanel
+                testId="tab-panel-events"
+                showError={events.length === 0 && loadError}
+                errorTestId="events-error"
+                errorText="Could not load events"
+              >
+                <EventsTab events={events} />
+              </TabPanel>
             )}
             {tab === "plan" && (
-              <div data-testid="tab-panel-plan" className="h-full overflow-hidden">
-                {planSteps.length === 0 && planError ? (
-                  <div
-                    data-testid="plan-error"
-                    className="p-4 text-sm text-red-400"
-                  >
-                    Could not load plan
-                  </div>
-                ) : (
-                  <PlanTab steps={planSteps} />
-                )}
-              </div>
+              <TabPanel
+                testId="tab-panel-plan"
+                showError={planSteps.length === 0 && planError}
+                errorTestId="plan-error"
+                errorText="Could not load plan"
+              >
+                <PlanTab steps={planSteps} />
+              </TabPanel>
             )}
             {tab === "meta" && (
               <div data-testid="tab-panel-meta" className="p-4 text-sm text-neutral-400">Meta — coming in Task 15</div>

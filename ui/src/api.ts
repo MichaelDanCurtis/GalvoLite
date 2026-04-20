@@ -75,6 +75,7 @@ export const api = {
   getSessionEvents: (id: string, limit: number = 100) =>
     request<EventRow[]>(`/api/sessions/${id}/events?limit=${limit}`),
 
+  // No limit/cursor — plan_steps per session is bounded (~dozens at most).
   getSessionPlanSteps: (id: string) =>
     request<PlanStep[]>(`/api/sessions/${id}/plan_steps`),
 
