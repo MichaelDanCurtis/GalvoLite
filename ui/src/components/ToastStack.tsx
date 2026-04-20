@@ -54,15 +54,21 @@ function SingleToast({ toast, onDismiss }: SingleToastProps) {
 
 interface ToastStackProps {
   toasts: Toast[];
+  /**
+   * Must be stable across renders (e.g. wrapped in `useCallback`). A new
+   * identity each render restarts every `SingleToast`'s dismiss timer.
+   */
   onDismiss: (id: string) => void;
 }
 
 export function ToastStack({ toasts, onDismiss }: ToastStackProps) {
   if (toasts.length === 0) return null;
 
-  // Render newest-first, up to 5; timers run for all toasts (see Option B).
-  // We need timers for ALL toasts, but only render the newest 5.
-  // We do this by rendering hidden timer-only instances for overflowed toasts.
+  // Render newest-first, up to 5; timers run for all toasts by also mounting
+  // overflow toasts inside hidden wrappers. Quirk: an overflow toast's timer
+  // starts at mount, not at visibility. If a toast spent 3s in overflow, being
+  // promoted to visible gives it only (duration - 3s) of remaining life —
+  // acceptable given overflow is an edge case (>5 in-flight toasts).
   const visible = toasts.slice(-5).reverse();
   const overflow = toasts.length > 5 ? toasts.slice(0, toasts.length - 5) : [];
 
