@@ -21,6 +21,10 @@ pub struct TestApp {
     /// Alias of `router` — Sub-plan 3 mcp_* tests use `setup.app`.
     pub app: axum::Router,
     pub db: Db,
+    /// Exposed so Sub-plan 4 tests can call `mgr.subscribe_events()` to assert
+    /// on the domain-event broadcaster. The router already holds its own
+    /// `Arc<SessionManager>`; this is the same Arc, cloned.
+    pub mgr: Arc<SessionManager>,
     pub _dir: TempDir,
 }
 
@@ -29,11 +33,12 @@ pub fn test_app() -> TestApp {
     let data_dir = dir.path().to_path_buf();
     let db = Db::open(data_dir.join("test.sqlite")).unwrap();
     let mgr = Arc::new(SessionManager::new(db.clone(), data_dir));
-    let router = galvolite::api::router(mgr);
+    let router = galvolite::api::router(mgr.clone());
     TestApp {
         app: router.clone(),
         router,
         db,
+        mgr,
         _dir: dir,
     }
 }

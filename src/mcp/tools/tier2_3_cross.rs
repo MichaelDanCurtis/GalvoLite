@@ -343,12 +343,14 @@ async fn notify_operator(ctx: ToolCtx, args: Value) -> ToolOutcome {
         },
     );
 
-    // Sub-plan 4 fans this out as a dashboard toast via WS. Today: event row only.
-    tracing::warn!(
-        session = %ctx.session_id,
-        "notify_operator called in degraded mode (Sub-plan 4 not landed) — \
-         event row written, no dashboard toast"
-    );
+    // Sub-plan 4: fan out to dashboard sockets as an operator.toast frame.
+    ctx.mgr
+        .event_bus()
+        .publish(crate::api::events::DomainEvent::OperatorToast {
+            session_id: ctx.session_id,
+            level: parsed.level.clone(),
+            message: parsed.message.clone(),
+        });
 
-    ToolOutcome::Ok(json!({ "ok": true, "degraded": true }))
+    ToolOutcome::Ok(json!({ "ok": true }))
 }

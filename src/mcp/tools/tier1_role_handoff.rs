@@ -103,6 +103,16 @@ async fn set_role(ctx: ToolCtx, args: Value) -> ToolOutcome {
         return ToolOutcome::AppError(e.to_string());
     }
 
+    // Sub-plan 4: fan out to dashboard sockets as a session.role_changed frame.
+    // Published AFTER apply_event_with_bus so any subscriber that reacts to the
+    // role-change frame by reading the event row will find it already written.
+    ctx.mgr
+        .event_bus()
+        .publish(crate::api::events::DomainEvent::SessionRoleChanged {
+            session_id: ctx.session_id,
+            role: parsed.role.clone(),
+        });
+
     // 2. Rewrite CLAUDE.md so next turn loads the new profile. Today only
     // `implementation_profile()` exists in claude_md; until other profiles
     // ship, prepend a role-marker header so callers (and tests) can see the

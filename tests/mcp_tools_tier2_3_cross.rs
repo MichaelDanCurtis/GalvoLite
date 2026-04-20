@@ -323,3 +323,44 @@ async fn notify_operator_invalid_level_returns_invalid_params() {
     .await;
     assert_eq!(r["error"]["code"], -32602);
 }
+
+#[tokio::test]
+async fn notify_operator_publishes_toast_event() {
+    use galvolite::api::events::DomainEvent;
+    let setup = common::test_app();
+    let proj = setup._dir.path().join("proj");
+    let (sid, token) = common::seed_session(&setup.db, &proj);
+
+    // Subscribe BEFORE calling the tool so we don't miss the broadcast frame.
+    let mut rx = setup.mgr.subscribe_events();
+
+    let _ = call(
+        setup.app.clone(),
+        &token,
+        "notify_operator",
+        json!({ "level": "warn", "message": "low fuel" }),
+    )
+    .await;
+
+    // apply_event_with_bus fires SessionEventAppended first; skip non-toast
+    // frames until the OperatorToast we care about arrives.
+    let deadline = std::time::Duration::from_secs(1);
+    let found = tokio::time::timeout(deadline, async {
+        loop {
+            match rx.recv().await.unwrap() {
+                DomainEvent::OperatorToast {
+                    session_id,
+                    level,
+                    message,
+                } => break (session_id, level, message),
+                _ => continue,
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for OperatorToast");
+
+    assert_eq!(found.0, sid);
+    assert_eq!(found.1, "warn");
+    assert_eq!(found.2, "low fuel");
+}

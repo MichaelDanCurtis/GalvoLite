@@ -223,3 +223,45 @@ async fn read_handoff_with_no_files_returns_null() {
         serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert!(inner["content"].is_null());
 }
+
+#[tokio::test]
+async fn set_role_publishes_role_changed_event() {
+    use galvolite::api::events::DomainEvent;
+    let setup = common::test_app();
+    let proj = setup._dir.path().join("proj");
+    let (sid, token) = common::seed_session_in_state_at(
+        &setup.db,
+        &proj,
+        SessionState::Working,
+    );
+
+    // Subscribe BEFORE calling the tool so we don't miss the broadcast frame.
+    let mut rx = setup.mgr.subscribe_events();
+
+    let _ = call(
+        setup.app.clone(),
+        &token,
+        "set_role",
+        json!({ "role": "scout" }),
+    )
+    .await;
+
+    // apply_event_with_bus fires SessionEventAppended first; skip non-role
+    // frames until the SessionRoleChanged we care about arrives.
+    let deadline = std::time::Duration::from_secs(1);
+    let found = tokio::time::timeout(deadline, async {
+        loop {
+            match rx.recv().await.unwrap() {
+                DomainEvent::SessionRoleChanged { session_id, role } => {
+                    break (session_id, role);
+                }
+                _ => continue,
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for SessionRoleChanged");
+
+    assert_eq!(found.0, sid);
+    assert_eq!(found.1, "scout");
+}
