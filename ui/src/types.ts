@@ -23,6 +23,12 @@ export interface Session {
   task_summary: string;
   created_at: string;
   ended_at: string | null;
+  // Sub-plan 4: patched via session.meta_changed event or fetched per-session
+  plan_markdown?: string | null;
+  seed_markdown?: string | null;
+  handoff_path?: string | null;
+  turn_count?: number;
+  est_tokens?: number;
 }
 
 export interface SignalRow {

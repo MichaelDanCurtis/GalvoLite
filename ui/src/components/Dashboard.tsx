@@ -3,6 +3,7 @@ import { Plus, PlayCircle } from "lucide-react";
 import { useProjects } from "../hooks/useProjects";
 import { useSessions } from "../hooks/useSessions";
 import { useExpandedSession } from "../hooks/useExpandedSession";
+import { useSessionEvents } from "../hooks/useSessionEvents";
 import { ProjectSelector } from "./ProjectSelector";
 import { SessionRow } from "./SessionRow";
 import { ExpandedSessionView } from "./ExpandedSessionView";
@@ -12,19 +13,31 @@ import { StartSessionModal } from "./modals/StartSessionModal";
 import { SendModal } from "./modals/SendModal";
 import { HandoffModal } from "./modals/HandoffModal";
 import { EndSessionModal } from "./modals/EndSessionModal";
-import type { Project } from "../types";
+import type { Project, DomainEvent } from "../types";
+
+function SessionEventBridge({
+  sessionId,
+  onEvent,
+}: {
+  sessionId: string;
+  onEvent: (e: DomainEvent) => void;
+}) {
+  useSessionEvents(sessionId, onEvent);
+  return null;
+}
 
 export function Dashboard() {
   const { projects, createProject, removeProject } = useProjects();
   const {
     sessions,
     refresh,
+    applyEvent,
     createSession,
     sendText,
     triggerHandoff,
     killSession,
     toggleAutopilot,
-  } = useSessions(2000);
+  } = useSessions();
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [startOpen, setStartOpen] = useState(false);
@@ -169,6 +182,12 @@ export function Dashboard() {
           />
         </>
       )}
+
+      {/* Per-session event subscriptions — renders nothing, keeps subscriptions
+          alive for all sessions regardless of the current project filter. */}
+      {sessions.map((s) => (
+        <SessionEventBridge key={s.id} sessionId={s.id} onEvent={applyEvent} />
+      ))}
     </div>
   );
 }
