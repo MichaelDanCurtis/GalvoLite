@@ -266,6 +266,20 @@ fn transition(current: SessionState, kind: &str) -> SessionState {
         (Idle,           "signal.ATTENTION:NEEDED")  => NeedsAttention,
         (AwaitingInput,  "signal.ATTENTION:NEEDED")  => NeedsAttention,
 
+        // Turn-tracking hooks (Sub-plan 2 Task 8). UserPromptSubmit drives
+        // Idle → Working naturally; the spec §8.6 normalization (Task 3)
+        // will land system.session_started → Idle so this is the canonical
+        // path for entering Working from outside the signal bridge.
+        (Idle,           "hook.UserPromptSubmit")    => Working,
+        (AwaitingInput,  "hook.UserPromptSubmit")    => Working,
+        (NeedsAttention, "hook.UserPromptSubmit")    => Working,
+        (Working,        "hook.UserPromptSubmit")    => Working,
+        // hook.Stop is logged but doesn't transition; on_stop emits
+        // system.stop_max_retries to flip Working → Idle when the limit
+        // is reached.
+        (Working,        "system.stop_max_retries")  => Idle,
+        (Idle,           "system.awaiting_input")    => AwaitingInput,
+
         // Everything else logs but doesn't change state. Includes:
         //  - signal.HANDOFF:READY / HANDOFF:BLOCKED / PLAN:READY / SEED:NEW /
         //    ROLE:SET / ATTENTION:CONTEXT — model-side annotations
