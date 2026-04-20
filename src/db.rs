@@ -709,6 +709,47 @@ impl Db {
         Ok(rows)
     }
 
+    /// Read the most recent `limit` events for a session in **reverse
+    /// chronological** order (newest first). Dashboard-facing counterpart to
+    /// [`Self::read_events_for_session`] (which returns ASC for the MCP
+    /// `read_events` tool). Same JSON row shape so both consumers can share
+    /// UI types.
+    ///
+    /// Ordering is by `id DESC` — events are append-only with a monotonic
+    /// primary key, so this is equivalent to "newest by insertion time"
+    /// without depending on the clock-based `ts` column (events that land
+    /// inside the same millisecond would otherwise tie-break nondeterministically).
+    pub fn read_recent_events(
+        &self,
+        session_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<serde_json::Value>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, ts, source, kind, payload_json, prev_state, next_state
+             FROM events
+             WHERE session_id = ?1
+             ORDER BY id DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![session_id.to_string(), limit], |r| {
+                Ok(serde_json::json!({
+                    "id":         r.get::<_, i64>(0)?,
+                    "ts":         r.get::<_, String>(1)?,
+                    "source":     r.get::<_, String>(2)?,
+                    "kind":       r.get::<_, String>(3)?,
+                    "payload":    serde_json::from_str::<serde_json::Value>(
+                                      &r.get::<_, String>(4)?
+                                  ).unwrap_or(serde_json::Value::Null),
+                    "prev_state": r.get::<_, Option<String>>(5)?,
+                    "next_state": r.get::<_, Option<String>>(6)?,
+                }))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Look up sibling sessions of a given session (same project), excluding
     /// the caller. Returns lightweight rows for the MCP `list_siblings` tool.
     pub fn list_session_siblings(

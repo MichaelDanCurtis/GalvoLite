@@ -1,9 +1,12 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import type { Session } from "../types";
+import type { DomainEvent, EventRow, Session } from "../types";
+import { api } from "../api";
+import { useSessionEvents } from "../hooks/useSessionEvents";
 import { TerminalPreview } from "./TerminalPreview";
 import { SessionRail } from "./SessionRail";
 import { RoleBadge } from "./RoleBadge";
+import { EventsTab } from "./EventsTab";
 
 type Tab = "terminal" | "events" | "plan" | "meta";
 
@@ -25,6 +28,7 @@ export function ExpandedSessionView({
   onToggleAutopilot,
 }: Props) {
   const [tab, setTab] = useState<Tab>("terminal");
+  const [events, setEvents] = useState<EventRow[]>([]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -33,6 +37,42 @@ export function ExpandedSessionView({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  // Initial fetch — populate newest-first (backend orders by id DESC).
+  // Reset when the session id changes so re-opening a different session
+  // does not show stale rows.
+  useEffect(() => {
+    let cancelled = false;
+    setEvents([]);
+    api.getSessionEvents(session.id, 100).then(
+      (rows) => {
+        if (!cancelled) setEvents(rows);
+      },
+      () => { /* transient network error; leave the list empty */ },
+    );
+    return () => { cancelled = true; };
+  }, [session.id]);
+
+  // Live append from the push channel. Prepend (newest-first) and
+  // deduplicate against the initial fetch + any concurrent pushes — the
+  // initial GET and the first live frame can race when a session has just
+  // emitted an event.
+  const onEvent = useCallback((e: DomainEvent) => {
+    if (e.type !== "session.event_appended") return;
+    if (e.session_id !== session.id) return;
+    setEvents((prev) => {
+      if (prev.some((row) => row.id === e.event_id)) return prev;
+      const row: EventRow = {
+        id: e.event_id,
+        kind: e.kind,
+        source: e.source,
+        ts: e.ts,
+        payload: e.payload,
+      };
+      return [row, ...prev];
+    });
+  }, [session.id]);
+  useSessionEvents(session.id, onEvent);
 
   return (
     <motion.div
@@ -81,7 +121,9 @@ export function ExpandedSessionView({
               <TerminalPreview sessionId={session.id} readOnly={session.autopilot} />
             )}
             {tab === "events" && (
-              <div data-testid="tab-panel-events" className="p-4 text-sm text-neutral-400">Events feed — coming in Task 13</div>
+              <div data-testid="tab-panel-events" className="h-full overflow-hidden">
+                <EventsTab events={events} />
+              </div>
             )}
             {tab === "plan" && (
               <div data-testid="tab-panel-plan" className="p-4 text-sm text-neutral-400">Plan checklist — coming in Task 14</div>

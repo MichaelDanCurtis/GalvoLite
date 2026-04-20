@@ -30,6 +30,7 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route("/api/sessions/:id/send", post(send_to_session))
         .route("/api/sessions/:id/autopilot", put(set_autopilot))
         .route("/api/sessions/:id/signals", get(get_signals))
+        .route("/api/sessions/:id/events", get(get_events))
         .route("/api/sessions/:id/terminal", get(terminal_ws))
         .route("/api/fs/list", get(list_directory))
         .route("/hooks/ingest", post(hooks::ingest))
@@ -241,6 +242,38 @@ async fn get_signals(
 ) -> Response {
     match mgr.get_signals(id) {
         Ok(signals) => Json(signals).into_response(),
+        Err(e) => err_to_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct EventsQuery {
+    limit: Option<i64>,
+}
+
+/// Default page size for the Events feed when `?limit=` is omitted.
+const EVENTS_DEFAULT_LIMIT: i64 = 100;
+/// Hard cap; any larger value is clamped silently.
+const EVENTS_MAX_LIMIT: i64 = 500;
+
+/// `GET /api/sessions/:id/events?limit=N` — reverse-chronological events feed
+/// for the dashboard's Events tab. Rows are shaped identically to the MCP
+/// `read_events` response (id, ts, source, kind, payload, prev_state,
+/// next_state) so `EventRow` is reusable. See [`crate::db::Db::read_recent_events`].
+async fn get_events(
+    State(mgr): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    axum::extract::Query(q): axum::extract::Query<EventsQuery>,
+) -> Response {
+    let raw = q.limit.unwrap_or(EVENTS_DEFAULT_LIMIT);
+    // Clamp: reject nonsense (<=0) → default; cap enormous values.
+    let limit = if raw <= 0 {
+        EVENTS_DEFAULT_LIMIT
+    } else {
+        raw.min(EVENTS_MAX_LIMIT)
+    };
+    match mgr.db().read_recent_events(id, limit) {
+        Ok(rows) => Json(rows).into_response(),
         Err(e) => err_to_response(e),
     }
 }

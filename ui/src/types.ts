@@ -32,6 +32,21 @@ export interface Session {
   last_event_kind?: string;
 }
 
+/**
+ * One row as returned by `GET /api/sessions/:id/events` (and shaped
+ * identically to the MCP `read_events` tool). Note the field is `id`, not
+ * `event_id` — matching the events table primary key.
+ */
+export interface EventRow {
+  id: number;
+  ts: string;
+  source: string;
+  kind: string;
+  payload: unknown;
+  prev_state?: string | null;
+  next_state?: string | null;
+}
+
 export interface SignalRow {
   // i64 server-side; JS number is safe to 2^53.
   id: number;
