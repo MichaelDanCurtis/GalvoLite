@@ -64,7 +64,7 @@ written into .mcp.json at session start. All tests pass currently.
 async fn set_role_updates_db_and_rewrites_claude_md() {
     let setup = common::test_app();
     let proj = setup._dir.path().join("proj");
-    let (sid, token) = common::seed_session_in_state(
+    let (sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &proj,
         SessionState::Working,
@@ -97,7 +97,7 @@ async fn set_role_updates_db_and_rewrites_claude_md() {
 #[tokio::test]
 async fn set_role_invalid_value_returns_invalid_params() {
     let setup = common::test_app();
-    let (_sid, token) = common::seed_session_in_state(
+    let (_sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
@@ -110,7 +110,7 @@ async fn set_role_invalid_value_returns_invalid_params() {
 async fn write_handoff_creates_file_event_and_handoff_path() {
     let setup = common::test_app();
     let proj = setup._dir.path().join("proj");
-    let (sid, token) = common::seed_session_in_state(&setup.db, &proj, SessionState::Working);
+    let (sid, token) = common::seed_session_in_state_at(&setup.db, &proj, SessionState::Working);
 
     let r = call(
         setup.app,
@@ -160,7 +160,7 @@ async fn write_handoff_creates_file_event_and_handoff_path() {
 #[tokio::test]
 async fn write_handoff_rejects_invalid_body() {
     let setup = common::test_app();
-    let (_sid, token) = common::seed_session_in_state(
+    let (_sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
@@ -179,7 +179,7 @@ async fn write_handoff_rejects_invalid_body() {
 async fn read_handoff_returns_most_recent_for_session() {
     let setup = common::test_app();
     let proj = setup._dir.path().join("proj");
-    let (_sid, token) = common::seed_session_in_state(&setup.db, &proj, SessionState::Working);
+    let (_sid, token) = common::seed_session_in_state_at(&setup.db, &proj, SessionState::Working);
 
     let _ = call(
         setup.app.clone(),
@@ -213,7 +213,7 @@ async fn read_handoff_returns_most_recent_for_session() {
 #[tokio::test]
 async fn read_handoff_with_no_files_returns_null() {
     let setup = common::test_app();
-    let (_sid, token) = common::seed_session_in_state(
+    let (_sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,

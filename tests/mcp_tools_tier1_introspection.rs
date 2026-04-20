@@ -34,7 +34,7 @@ fn inner_text(r: &Value) -> Value {
 #[tokio::test]
 async fn whoami_returns_session_identity() {
     let setup = common::test_app();
-    let (sid, token) = common::seed_session_in_state(
+    let (sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
@@ -52,7 +52,7 @@ async fn whoami_returns_session_identity() {
 #[tokio::test]
 async fn pause_self_transitions_to_awaiting_input() {
     let setup = common::test_app();
-    let (sid, token) = common::seed_session_in_state(
+    let (sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
@@ -73,7 +73,7 @@ async fn pause_self_transitions_to_awaiting_input() {
 #[tokio::test]
 async fn pause_self_missing_reason_returns_invalid_params() {
     let setup = common::test_app();
-    let (_sid, token) = common::seed_session_in_state(
+    let (_sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
@@ -85,7 +85,7 @@ async fn pause_self_missing_reason_returns_invalid_params() {
 #[tokio::test]
 async fn request_end_transitions_to_ended() {
     let setup = common::test_app();
-    let (sid, token) = common::seed_session_in_state(
+    let (sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
@@ -103,7 +103,7 @@ async fn request_end_transitions_to_ended() {
 #[tokio::test]
 async fn get_transcript_for_non_running_session_returns_empty() {
     let setup = common::test_app();
-    let (_sid, token) = common::seed_session_in_state(
+    let (_sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Idle,
@@ -117,7 +117,7 @@ async fn get_transcript_for_non_running_session_returns_empty() {
 #[tokio::test]
 async fn get_pty_log_for_non_running_session_returns_empty() {
     let setup = common::test_app();
-    let (_sid, token) = common::seed_session_in_state(
+    let (_sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Idle,
@@ -131,7 +131,7 @@ async fn get_pty_log_for_non_running_session_returns_empty() {
 #[tokio::test]
 async fn introspection_tools_write_no_event_rows() {
     let setup = common::test_app();
-    let (sid, token) = common::seed_session_in_state(
+    let (sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,

@@ -31,7 +31,7 @@ async fn call(app: axum::Router, token: &str, name: &str, args: Value) -> Value 
 #[tokio::test]
 async fn every_reserved_stub_returns_not_implemented() {
     let setup = common::test_app();
-    let (_sid, token) = common::seed_session_in_state(
+    let (_sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,

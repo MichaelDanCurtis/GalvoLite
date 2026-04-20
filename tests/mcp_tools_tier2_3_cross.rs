@@ -138,7 +138,7 @@ async fn status_of_returns_full_snapshot() {
 #[tokio::test]
 async fn status_of_missing_session_returns_app_error() {
     let setup = common::test_app();
-    let (_sid, token) = common::seed_session_in_state(
+    let (_sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
@@ -165,7 +165,7 @@ async fn status_of_missing_session_returns_app_error() {
 #[tokio::test]
 async fn read_events_returns_event_rows_for_session() {
     let setup = common::test_app();
-    let (_sid, token) = common::seed_session_in_state(
+    let (_sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
@@ -246,7 +246,7 @@ async fn send_to_session_writes_event_targeting_other_session() {
 #[tokio::test]
 async fn ask_operator_returns_timed_out_immediately_in_degraded_mode() {
     let setup = common::test_app();
-    let (_sid, token) = common::seed_session_in_state(
+    let (_sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
@@ -277,7 +277,7 @@ async fn ask_operator_returns_timed_out_immediately_in_degraded_mode() {
 #[tokio::test]
 async fn notify_operator_writes_event_no_state_change() {
     let setup = common::test_app();
-    let (sid, token) = common::seed_session_in_state(
+    let (sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
@@ -309,7 +309,7 @@ async fn notify_operator_writes_event_no_state_change() {
 #[tokio::test]
 async fn notify_operator_invalid_level_returns_invalid_params() {
     let setup = common::test_app();
-    let (_sid, token) = common::seed_session_in_state(
+    let (_sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,

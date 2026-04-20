@@ -58,7 +58,7 @@ fn inner_text(r: &Value) -> Value {
 async fn full_mcp_lifecycle_initialize_through_each_tier() {
     let setup = common::test_app();
     let proj = setup._dir.path().join("proj");
-    let (sid, token) = common::seed_session_in_state(
+    let (sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &proj,
         SessionState::Working,

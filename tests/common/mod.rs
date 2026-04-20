@@ -18,20 +18,23 @@ use tower::ServiceExt;
 
 pub struct TestApp {
     pub router: axum::Router,
+    /// Alias of `router` — Sub-plan 3 mcp_* tests use `setup.app`.
+    pub app: axum::Router,
     pub db: Db,
-    _tmp: TempDir,
+    pub _dir: TempDir,
 }
 
 pub fn test_app() -> TestApp {
-    let tmp = TempDir::new().unwrap();
-    let data_dir = tmp.path().to_path_buf();
+    let dir = TempDir::new().unwrap();
+    let data_dir = dir.path().to_path_buf();
     let db = Db::open(data_dir.join("test.sqlite")).unwrap();
     let mgr = Arc::new(SessionManager::new(db.clone(), data_dir));
     let router = galvolite::api::router(mgr);
     TestApp {
+        app: router.clone(),
         router,
         db,
-        _tmp: tmp,
+        _dir: dir,
     }
 }
 
@@ -163,3 +166,53 @@ pub async fn post_hook(
 // state column directly when they need to (some tests want that lower-level
 // view).
 pub type DbState = DbSessionState;
+
+// ---------------------------------------------------------------------------
+// Sub-plan 3 (MCP surface) helpers — merged in during the rebase. Keep names
+// distinct from the hooks-side helpers above when signatures differ.
+// ---------------------------------------------------------------------------
+
+/// Force a session into a specific state by direct UPDATE (Sub-plan 3 alias
+/// of `set_state` above; both call the same SQL).
+pub fn force_state(db: &Db, sid: uuid::Uuid, state: SessionState) {
+    set_state(db, sid, state);
+}
+
+/// Create a project + session row at a specific path and stamp it with an
+/// `api_token`. Returns the session id and the token.
+pub fn seed_session(db: &Db, project_dir: &std::path::Path) -> (uuid::Uuid, String) {
+    std::fs::create_dir_all(project_dir).unwrap();
+    let project = db
+        .insert_project(NewProject {
+            name: "test-proj".into(),
+            path: project_dir.to_string_lossy().into_owned(),
+            remote_url: None,
+        })
+        .unwrap();
+    let session = db
+        .insert_session(NewSession {
+            project_id: project.id,
+            role: "implementation".into(),
+            branch: None,
+            worktree_path: project.path.clone(),
+            task_summary: "test".into(),
+            parent_session_id: None,
+        })
+        .unwrap();
+    let token = format!("tok_{}", uuid::Uuid::new_v4().simple());
+    db.set_api_token(session.id, &token).unwrap();
+    (session.id, token)
+}
+
+/// Same as [`seed_session`] but additionally forces the session into the
+/// given state via direct UPDATE. Distinct from `seed_session_in_state`
+/// (which generates its own path).
+pub fn seed_session_in_state_at(
+    db: &Db,
+    project_dir: &std::path::Path,
+    state: SessionState,
+) -> (uuid::Uuid, String) {
+    let (sid, token) = seed_session(db, project_dir);
+    force_state(db, sid, state);
+    (sid, token)
+}

@@ -51,7 +51,7 @@ fn count_events(db: &galvolite::db::Db, sid: Uuid, kind: &str) -> i64 {
 #[tokio::test]
 async fn status_report_working_writes_event_no_state_change() {
     let setup = common::test_app();
-    let (sid, token) = common::seed_session_in_state(
+    let (sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
@@ -72,7 +72,7 @@ async fn status_report_working_writes_event_no_state_change() {
 #[tokio::test]
 async fn status_report_blocked_transitions_to_needs_attention() {
     let setup = common::test_app();
-    let (sid, token) = common::seed_session_in_state(
+    let (sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
@@ -93,7 +93,7 @@ async fn status_report_blocked_transitions_to_needs_attention() {
 #[tokio::test]
 async fn status_report_complete_transitions_to_idle() {
     let setup = common::test_app();
-    let (sid, token) = common::seed_session_in_state(
+    let (sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
@@ -111,7 +111,7 @@ async fn status_report_complete_transitions_to_idle() {
 #[tokio::test]
 async fn request_attention_transitions_and_records_reason() {
     let setup = common::test_app();
-    let (sid, token) = common::seed_session_in_state(
+    let (sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
@@ -159,7 +159,7 @@ async fn request_attention_transitions_and_records_reason() {
 #[tokio::test]
 async fn set_plan_writes_plan_markdown_column() {
     let setup = common::test_app();
-    let (sid, token) = common::seed_session_in_state(
+    let (sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
@@ -189,7 +189,7 @@ async fn set_plan_writes_plan_markdown_column() {
 #[tokio::test]
 async fn set_seed_writes_seed_markdown_column() {
     let setup = common::test_app();
-    let (sid, token) = common::seed_session_in_state(
+    let (sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Idle,
@@ -218,7 +218,7 @@ async fn set_seed_writes_seed_markdown_column() {
 #[tokio::test]
 async fn status_report_invalid_kind_returns_invalid_params() {
     let setup = common::test_app();
-    let (_sid, token) = common::seed_session_in_state(
+    let (_sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
@@ -236,7 +236,7 @@ async fn status_report_invalid_kind_returns_invalid_params() {
 #[tokio::test]
 async fn plan_check_step_writes_event() {
     let setup = common::test_app();
-    let (sid, token) = common::seed_session_in_state(
+    let (sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
@@ -261,7 +261,7 @@ async fn plan_check_step_writes_event() {
 #[tokio::test]
 async fn plan_check_step_without_title_or_hash_returns_invalid_params() {
     let setup = common::test_app();
-    let (_sid, token) = common::seed_session_in_state(
+    let (_sid, token) = common::seed_session_in_state_at(
         &setup.db,
         &setup._dir.path().join("proj"),
         SessionState::Working,
