@@ -1,4 +1,5 @@
 use galvolite::db::{Db, NewProject, NewSession};
+use galvolite::error::Error;
 use galvolite::state::{apply_event, EventInput, SessionState, Source};
 use serde_json::json;
 use tempfile::TempDir;
@@ -139,9 +140,11 @@ fn terminal_state_rejects_further_transitions() {
     let (db, _t, sid) = open_db_with_session();
     apply_event(&db, sid, ev("system.session_ended")).unwrap();
     let err = apply_event(&db, sid, ev("signal.STATUS:WORKING")).unwrap_err();
-    let msg = format!("{err}");
-    assert!(
-        msg.contains("terminal"),
-        "expected terminal-state rejection, got: {msg}"
-    );
+    match err {
+        Error::TerminalState { session_id, kind } => {
+            assert_eq!(session_id, sid.to_string());
+            assert_eq!(kind, "signal.STATUS:WORKING");
+        }
+        other => panic!("expected TerminalState, got {other:?}"),
+    }
 }

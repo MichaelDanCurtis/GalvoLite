@@ -173,18 +173,17 @@ pub fn apply_event(
 
     // 2. Reject transitions out of terminal states.
     if current.is_terminal() {
-        return Err(Error::Config(format!(
-            "session {session_id} is in terminal state {current}; refusing event {kind:?}",
-            kind = input.kind,
-        )));
+        return Err(Error::TerminalState {
+            session_id: session_id.to_string(),
+            kind: input.kind.clone(),
+        });
     }
 
     // 3. Compute next state from (current, kind).
     let next = transition(current, &input.kind);
 
     // 4. Append events row (or short-circuit on dedup hit).
-    let payload_str = serde_json::to_string(&input.payload)
-        .map_err(|e| Error::Config(format!("event payload serialize failed: {e}")))?;
+    let payload_str = serde_json::to_string(&input.payload)?;
     let (event_id, deduped) = crate::db::Db::append_event_in_tx(
         &tx,
         session_id,
@@ -240,14 +239,14 @@ fn transition(current: SessionState, kind: &str) -> SessionState {
     use SessionState::*;
     match (current, kind) {
         // Lifecycle (used by SessionManager via Task 7 + Sub-plan 2 hooks).
-        // Per spec §8.6, SessionStart → Idle. SessionManager spawn_session,
-        // however, immediately writes the inject prompt right after spawn —
-        // which the future hook surface (Sub-plan 2) will model as
-        // operator.user_prompt_submit pushing Idle → Working. Until that
-        // surface lands, recognize the synthetic kind so spawn lands the
-        // session in Working in one event.
-        (Starting, "system.session_started") | (Starting, "hook.SessionStart") => Working,
-        (_,        "system.session_ended")   | (_,        "hook.SessionEnd")   => Ended,
+        // Per spec §8.6, system.session_started → Idle. The UserPromptSubmit
+        // hook (Sub-plan 2 Task 8) now drives Idle → Working naturally, so
+        // we no longer need the Sub-plan 1 deviation that landed straight
+        // in Working.
+        (Starting, "system.session_started") | (Starting, "hook.SessionStart") => Idle,
+        (s,        "system.session_ended")   if !s.is_terminal()               => Ended,
+        (s,        "hook.SessionEnd")        if !s.is_terminal()               => current,
+        (s,        "system.session_errored") if !s.is_terminal()               => Error,
         (_,        "system.session_orphaned")                                  => Error,
 
         // Signal bridge (System events emitted by SignalPump in Task 8).
@@ -264,6 +263,32 @@ fn transition(current: SessionState, kind: &str) -> SessionState {
         (Working,        "signal.ATTENTION:NEEDED")  => NeedsAttention,
         (Idle,           "signal.ATTENTION:NEEDED")  => NeedsAttention,
         (AwaitingInput,  "signal.ATTENTION:NEEDED")  => NeedsAttention,
+
+        // Turn-tracking hooks (Sub-plan 2 Task 8). UserPromptSubmit drives
+        // Idle → Working naturally; the spec §8.6 normalization (Task 3)
+        // will land system.session_started → Idle so this is the canonical
+        // path for entering Working from outside the signal bridge.
+        (Idle,           "hook.UserPromptSubmit")    => Working,
+        (AwaitingInput,  "hook.UserPromptSubmit")    => Working,
+        (NeedsAttention, "hook.UserPromptSubmit")    => Working,
+        (Working,        "hook.UserPromptSubmit")    => Working,
+        // hook.Stop is logged but doesn't transition; on_stop emits
+        // system.stop_max_retries to flip Working → Idle when the limit
+        // is reached.
+        (Working,        "system.stop_max_retries")  => Idle,
+        // The 1- and 2-Stop watchdog (turn::on_stop) emits
+        // system.awaiting_input from whatever state the session was in when
+        // Stop arrived — usually Working, sometimes NeedsAttention. Without
+        // these arms the watchdog would no-op (the spawned task spins, fires,
+        // and finds no transition match).
+        (Working,        "system.awaiting_input")    => AwaitingInput,
+        (NeedsAttention, "system.awaiting_input")    => AwaitingInput,
+        (Idle,           "system.awaiting_input")    => AwaitingInput,
+
+        // Observation hooks (Sub-plan 2 Task 9). PostToolUse(Bash) for
+        // `git push` raises attention via `system.attention_needed`; the
+        // hook itself doesn't transition state.
+        (s,              "system.attention_needed")  if !s.is_terminal() => NeedsAttention,
 
         // Everything else logs but doesn't change state. Includes:
         //  - signal.HANDOFF:READY / HANDOFF:BLOCKED / PLAN:READY / SEED:NEW /

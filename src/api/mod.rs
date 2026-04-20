@@ -3,6 +3,9 @@
 //! Builds a Router that the CLI `serve` command and the Tauri binary both use.
 //! All business logic is delegated to SessionManager.
 
+pub mod hook_handlers;
+pub mod hooks;
+
 use crate::session_manager::SessionManager;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -27,6 +30,7 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route("/api/sessions/:id/signals", get(get_signals))
         .route("/api/sessions/:id/terminal", get(terminal_ws))
         .route("/api/fs/list", get(list_directory))
+        .route("/hooks/ingest", post(hooks::ingest))
         .layer(CorsLayer::permissive())
         .with_state(mgr);
 

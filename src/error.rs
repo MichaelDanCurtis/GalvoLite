@@ -44,6 +44,17 @@ pub enum Error {
 
     #[error("invalid path: {0}")]
     InvalidPath(String),
+
+    /// A transition was attempted on a session whose state is terminal (Error or Ended).
+    #[error("session {session_id} is in terminal state — cannot apply {kind}")]
+    TerminalState {
+        session_id: String,
+        kind: String,
+    },
+
+    /// Failed to serialize/deserialize an event payload to JSON.
+    #[error("event payload JSON error: {0}")]
+    EventPayload(#[from] serde_json::Error),
 }
 
 impl Error {
