@@ -93,6 +93,12 @@ export const api = {
       `/api/fs/list?path=${encodeURIComponent(path)}`,
     ),
 
+  answerOperatorPrompt: (promptId: string, answer: string) =>
+    request<void>(`/operator/prompt/${encodeURIComponent(promptId)}/answer`, {
+      method: "POST",
+      body: JSON.stringify({ answer }),
+    }),
+
   terminalWsUrl: (id: string): string => {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     return `${proto}//${window.location.host}/api/sessions/${id}/terminal`;

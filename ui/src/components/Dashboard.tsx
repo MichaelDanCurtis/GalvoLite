@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Plus, PlayCircle } from "lucide-react";
 import { useProjects } from "../hooks/useProjects";
 import { useSessions } from "../hooks/useSessions";
@@ -26,7 +26,11 @@ function SessionEventBridge({
   return null;
 }
 
-export function Dashboard() {
+interface DashboardProps {
+  onGlobalEvent?: (e: DomainEvent) => void;
+}
+
+export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
   const { projects, createProject, removeProject } = useProjects();
   const {
     sessions,
@@ -44,6 +48,14 @@ export function Dashboard() {
   const [removeTarget, setRemoveTarget] = useState<Project | null>(null);
   const { expandedId, expand, collapse } = useExpandedSession();
   const [modal, setModal] = useState<null | "send" | "handoff" | "end">(null);
+
+  const bridgeHandler = useCallback(
+    (e: DomainEvent) => {
+      applyEvent(e);
+      onGlobalEvent?.(e);
+    },
+    [applyEvent, onGlobalEvent],
+  );
 
   const filtered = selectedProject
     ? sessions.filter((s) => s.project_id === selectedProject)
@@ -186,7 +198,7 @@ export function Dashboard() {
       {/* Per-session event subscriptions — renders nothing, keeps subscriptions
           alive for all sessions regardless of the current project filter. */}
       {sessions.map((s) => (
-        <SessionEventBridge key={s.id} sessionId={s.id} onEvent={applyEvent} />
+        <SessionEventBridge key={s.id} sessionId={s.id} onEvent={bridgeHandler} />
       ))}
     </div>
   );
