@@ -1,12 +1,6 @@
 export type SessionState =
-  | "spawning"
-  | "working"
-  | "attention_needed"
-  | "handing_off"
-  | "restoring"
-  | "complete"
-  | "killed"
-  | "error";
+  | "starting" | "idle" | "working" | "awaiting_input"
+  | "needs_attention" | "error" | "ended";
 
 export interface Project {
   id: string;
@@ -72,12 +66,24 @@ export interface DirectoryListing {
 }
 
 export const STATE_COLORS: Record<SessionState, string> = {
-  spawning: "bg-blue-400",
+  starting: "bg-blue-400",
+  idle: "bg-gray-300",
   working: "bg-green-400",
-  attention_needed: "bg-yellow-400",
-  handing_off: "bg-blue-400",
-  restoring: "bg-blue-400",
-  complete: "bg-gray-400",
-  killed: "bg-red-400",
+  awaiting_input: "bg-yellow-400",
+  needs_attention: "bg-orange-400",
   error: "bg-red-500",
+  ended: "bg-gray-400",
 };
+
+export type PlanStepStatus = "pending" | "working" | "done" | "blocked";
+export interface PlanStep { hash: string; text: string; status: PlanStepStatus; note?: string }
+
+export type DomainEvent =
+  | { type: "session.state_changed"; session_id: string; prev: SessionState | null; next: SessionState; last_event_ts: string }
+  | { type: "session.event_appended"; session_id: string; event_id: number; kind: string; source: string; ts: string; payload: unknown }
+  | { type: "session.role_changed"; session_id: string; role: string }
+  | { type: "session.meta_changed"; session_id: string; turn_count: number; est_tokens: number; plan_markdown: string | null; seed_markdown: string | null; handoff_path: string | null }
+  | { type: "session.plan_replaced"; session_id: string; steps: PlanStep[] }
+  | { type: "session.plan_step_changed"; session_id: string; step_hash: string; prev_status: PlanStepStatus; next_status: PlanStepStatus; note: string | null }
+  | { type: "operator.prompt"; prompt_id: string; session_id: string; question: string; choices: string[] | null; timeout_secs: number | null }
+  | { type: "operator.toast"; session_id: string; level: "info" | "warn" | "urgent"; message: string };

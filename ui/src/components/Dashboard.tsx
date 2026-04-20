@@ -39,11 +39,11 @@ export function Dashboard() {
   const expanded = sessions.find((s) => s.id === expandedId) ?? null;
 
   const activeCount = filtered.filter(
-    (s) => !["complete", "killed", "error"].includes(s.state)
+    (s) => !["ended", "error"].includes(s.state)
   ).length;
 
   const attentionCount = filtered.filter(
-    (s) => s.state === "attention_needed"
+    (s) => s.state === "needs_attention"
   ).length;
 
   return (
