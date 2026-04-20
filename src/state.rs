@@ -173,18 +173,17 @@ pub fn apply_event(
 
     // 2. Reject transitions out of terminal states.
     if current.is_terminal() {
-        return Err(Error::Config(format!(
-            "session {session_id} is in terminal state {current}; refusing event {kind:?}",
-            kind = input.kind,
-        )));
+        return Err(Error::TerminalState {
+            session_id: session_id.to_string(),
+            kind: input.kind.clone(),
+        });
     }
 
     // 3. Compute next state from (current, kind).
     let next = transition(current, &input.kind);
 
     // 4. Append events row (or short-circuit on dedup hit).
-    let payload_str = serde_json::to_string(&input.payload)
-        .map_err(|e| Error::Config(format!("event payload serialize failed: {e}")))?;
+    let payload_str = serde_json::to_string(&input.payload)?;
     let (event_id, deduped) = crate::db::Db::append_event_in_tx(
         &tx,
         session_id,
