@@ -239,13 +239,11 @@ fn transition(current: SessionState, kind: &str) -> SessionState {
     use SessionState::*;
     match (current, kind) {
         // Lifecycle (used by SessionManager via Task 7 + Sub-plan 2 hooks).
-        // Per spec §8.6, SessionStart → Idle. SessionManager spawn_session,
-        // however, immediately writes the inject prompt right after spawn —
-        // which the future hook surface (Sub-plan 2) will model as
-        // operator.user_prompt_submit pushing Idle → Working. Until that
-        // surface lands, recognize the synthetic kind so spawn lands the
-        // session in Working in one event.
-        (Starting, "system.session_started") | (Starting, "hook.SessionStart") => Working,
+        // Per spec §8.6, system.session_started → Idle. The UserPromptSubmit
+        // hook (Sub-plan 2 Task 8) now drives Idle → Working naturally, so
+        // we no longer need the Sub-plan 1 deviation that landed straight
+        // in Working.
+        (Starting, "system.session_started") | (Starting, "hook.SessionStart") => Idle,
         (s,        "system.session_ended")   if !s.is_terminal()               => Ended,
         (s,        "hook.SessionEnd")        if !s.is_terminal()               => current,
         (s,        "system.session_errored") if !s.is_terminal()               => Error,
