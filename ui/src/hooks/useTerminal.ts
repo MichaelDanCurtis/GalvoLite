@@ -189,9 +189,10 @@ export function useTerminal(
             const u8 = new Uint8Array(ev.data);
             substituteShadingToBlock(u8);
             term.write(u8);
-          } else if (typeof ev.data === "string") {
-            term.write(ev.data.replace(/[\u2591\u2592\u2593]/g, "\u2588"));
           }
+          // Text frames are DomainEvent JSON (Sub-plan 4) — handled by
+          // useSessionEvents on its own WS subscription. Ignore here so
+          // event JSON doesn't leak into xterm output.
         };
         ws.onclose = () => {
           if (cancelled) return;
