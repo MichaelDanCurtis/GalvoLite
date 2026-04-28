@@ -6,7 +6,7 @@
 //! operator's answer (or a per-call timeout).
 //!
 //! The dashboard (or anything with the session's API token) posts the answer
-//! back to `POST /operator/prompt/:id/answer`. That handler looks up the
+//! back to `POST /api/operator/prompt/:id/answer`. That handler looks up the
 //! registered oneshot and hands the answer JSON across, unparking the MCP
 //! turn. Unknown prompt ids yield 404.
 //!

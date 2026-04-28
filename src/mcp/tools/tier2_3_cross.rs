@@ -4,7 +4,7 @@
 //! model turn on a oneshot registered with the SessionManager's
 //! `OperatorPromptRegistry`, publishes an `operator.prompt` domain event for
 //! subscribed dashboard sockets, and resolves when either an operator answer
-//! arrives via `POST /operator/prompt/:id/answer` or the per-call timeout
+//! arrives via `POST /api/operator/prompt/:id/answer` or the per-call timeout
 //! fires (returning `{answer:null, timed_out:true}`). `notify_operator` is a
 //! one-shot toast event — event row + `operator.toast` broadcast.
 

@@ -200,15 +200,15 @@ async fn dashboard_event_stream_ask_operator_lifecycle() {
     let pid = prompt_id.unwrap();
 
     // -----------------------------------------------------------------------
-    // 7. POST the answer to /operator/prompt/:id/answer — assert 204.
+    // 7. POST the answer to /api/operator/prompt/:id/answer — assert 204.
     // -----------------------------------------------------------------------
     let answer_resp = client
-        .post(format!("{base_url}/operator/prompt/{pid}/answer"))
+        .post(format!("{base_url}/api/operator/prompt/{pid}/answer"))
         .header("content-type", "application/json")
         .json(&json!({ "answer": "yes" }))
         .send()
         .await
-        .expect("POST /operator/prompt/:id/answer failed");
+        .expect("POST /api/operator/prompt/:id/answer failed");
     assert_eq!(
         answer_resp.status().as_u16(),
         204,

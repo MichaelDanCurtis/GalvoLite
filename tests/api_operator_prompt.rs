@@ -46,7 +46,7 @@ async fn ask_operator_resolves_when_http_answer_lands() {
     // Answer over HTTP.
     let req = Request::builder()
         .method("POST")
-        .uri(format!("/operator/prompt/{prompt_id}/answer"))
+        .uri(format!("/api/operator/prompt/{prompt_id}/answer"))
         .header("content-type", "application/json")
         .header("Authorization", format!("Bearer {token_for_answer}"))
         .body(Body::from(
@@ -90,7 +90,7 @@ async fn answer_unknown_prompt_returns_404() {
     let bogus = uuid::Uuid::new_v4();
     let req = Request::builder()
         .method("POST")
-        .uri(format!("/operator/prompt/{bogus}/answer"))
+        .uri(format!("/api/operator/prompt/{bogus}/answer"))
         .header("content-type", "application/json")
         .header("Authorization", format!("Bearer {token}"))
         .body(Body::from(

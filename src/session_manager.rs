@@ -41,7 +41,7 @@ pub struct SessionManager {
     event_bus: EventBroadcaster,
     /// In-memory map of pending `ask_operator` prompts. The MCP handler
     /// parks on a oneshot keyed by a fresh `prompt_id`; the
-    /// `POST /operator/prompt/:id/answer` route resolves it. Kept on the
+    /// `POST /api/operator/prompt/:id/answer` route resolves it. Kept on the
     /// SessionManager so both callers share the same pending-map.
     operator_registry: Arc<OperatorPromptRegistry>,
 }

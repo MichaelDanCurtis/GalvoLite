@@ -94,7 +94,7 @@ export const api = {
     ),
 
   answerOperatorPrompt: (promptId: string, answer: string) =>
-    request<void>(`/operator/prompt/${encodeURIComponent(promptId)}/answer`, {
+    request<void>(`/api/operator/prompt/${encodeURIComponent(promptId)}/answer`, {
       method: "POST",
       body: JSON.stringify({ answer }),
     }),
