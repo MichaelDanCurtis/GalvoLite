@@ -150,7 +150,8 @@ impl SessionManager {
 
         // Write per-session .claude/settings.json so claude code's hook
         // dispatch table points all seven hooks at our galvolite-hook
-        // binary. The .mcp.json companion is Sub-plan 3's concern.
+        // binary, plus .mcp.json so claude discovers our Streamable HTTP
+        // MCP server with the per-session bearer token.
         match crate::spawn_config::resolve_hook_binary() {
             Ok(hook_bin) => {
                 if let Err(e) = crate::spawn_config::write_settings_json(
@@ -165,6 +166,21 @@ impl SessionManager {
                 orphan_session(&self.db, session.id, "hook_binary_resolve_failed");
                 return Err(Error::io(PathBuf::from("galvolite-hook"), e));
             }
+        }
+
+        // Mint per-session bearer token, persist to sessions.api_token, and
+        // write .mcp.json so the spawned claude process can authenticate to
+        // our /mcp endpoint. Token format `tok_<uuid-simple>` matches the
+        // pattern used in tests/dashboard_smoke_e2e.rs.
+        let api_token = format!("tok_{}", Uuid::new_v4().simple());
+        if let Err(e) = self.db.set_api_token(session.id, &api_token) {
+            orphan_session(&self.db, session.id, "api_token_persist_failed");
+            return Err(e);
+        }
+        let api_base = crate::spawn_config::resolve_api_base();
+        if let Err(e) = crate::spawn_config::write_mcp_json(&worktree, &api_base, &api_token) {
+            orphan_session(&self.db, session.id, "mcp_json_write_failed");
+            return Err(e);
         }
 
         let cycle_id = self.db.start_cycle(session.id)?;

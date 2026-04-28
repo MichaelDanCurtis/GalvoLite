@@ -14,6 +14,24 @@ use crate::error::{Error, Result};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
+/// Resolve the GalvoLite HTTP base URL spawned `claude` processes should
+/// reach via Streamable HTTP transport. `.mcp.json` puts this in `url`.
+///
+/// Order:
+/// 1. `GALVOLITE_API_BASE` env var if set (overrides everything).
+/// 2. `http://127.0.0.1:<GALVOLITE_PORT>` if `GALVOLITE_PORT` is set.
+/// 3. Default `http://127.0.0.1:3001` (matches the tauri shell default).
+pub fn resolve_api_base() -> String {
+    if let Ok(v) = std::env::var("GALVOLITE_API_BASE") {
+        return v;
+    }
+    let port = std::env::var("GALVOLITE_PORT")
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(3001);
+    format!("http://127.0.0.1:{port}")
+}
+
 /// Resolve the path to the `galvolite-hook` binary.
 ///
 /// Order:
