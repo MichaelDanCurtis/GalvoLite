@@ -351,9 +351,11 @@ pub fn apply_event_with_bus(
 
     // Sub-plan 5 Task 3: snapshot prior plan_steps for diff before write.
     // Only `mcp.set_plan` mutates the table, so other kinds skip the read.
+    // Propagate DB errors here with `?` — the event has not yet committed,
+    // so failing is safe and preferable to silently treating every step as new.
     let prior_plan_steps: Option<Vec<crate::plan_steps::DbPlanStep>> =
         if kind == "mcp.set_plan" {
-            Some(db.read_plan_steps_raw(session_id).unwrap_or_default())
+            Some(db.read_plan_steps_raw(session_id)?)
         } else {
             None
         };
@@ -382,33 +384,52 @@ pub fn apply_event_with_bus(
         // plan_steps table. Diff is computed against the pre-event snapshot
         // captured above (post-event read would always show zero changes
         // because we delete-then-reinsert).
+        //
+        // The event was already committed above, so failures here must NOT
+        // return an error to the caller (that would falsely imply the event
+        // didn't land). Log and skip the bus publish instead.
         if kind == "mcp.set_plan" {
-            if let Ok(next_rows) = db.read_plan_steps_raw(session_id) {
-                let json_steps = db.read_plan_steps(session_id).unwrap_or_default();
-                bus.publish(crate::api::events::DomainEvent::SessionPlanReplaced {
-                    session_id,
-                    steps: serde_json::Value::Array(json_steps),
-                });
-                let prior = prior_plan_steps.unwrap_or_default();
-                let next_inputs: Vec<crate::plan_steps::PlanStepInput> = next_rows
-                    .into_iter()
-                    .map(|r| crate::plan_steps::PlanStepInput {
-                        step_hash: r.step_hash,
-                        title:     r.title,
-                        status:    crate::plan_steps::PlanStepStatus::from_input_str(&r.status)
-                            .unwrap_or(crate::plan_steps::PlanStepStatus::Pending),
-                        ordinal:   r.ordinal,
-                    })
-                    .collect();
-                let diff = crate::plan_steps::diff_plan_steps(&prior, &next_inputs);
-                for c in diff.changed {
-                    bus.publish(crate::api::events::DomainEvent::SessionPlanStepChanged {
+            match db.read_plan_steps_raw(session_id) {
+                Ok(next_rows) => {
+                    let json_steps = match db.read_plan_steps(session_id) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!(
+                                "set_plan publish: read_plan_steps failed for {session_id}: {e}"
+                            );
+                            Vec::new()
+                        }
+                    };
+                    bus.publish(crate::api::events::DomainEvent::SessionPlanReplaced {
                         session_id,
-                        step_hash:   c.step_hash,
-                        prev_status: c.prev_status,
-                        next_status: c.next_status,
-                        note:        None,
+                        steps: serde_json::Value::Array(json_steps),
                     });
+                    let prior = prior_plan_steps.unwrap_or_default();
+                    let next_inputs: Vec<crate::plan_steps::PlanStepInput> = next_rows
+                        .into_iter()
+                        .map(|r| crate::plan_steps::PlanStepInput {
+                            step_hash: r.step_hash,
+                            title:     r.title,
+                            status:    crate::plan_steps::PlanStepStatus::from_input_str(&r.status)
+                                .unwrap_or(crate::plan_steps::PlanStepStatus::Pending),
+                            ordinal:   r.ordinal,
+                        })
+                        .collect();
+                    let diff = crate::plan_steps::diff_plan_steps(&prior, &next_inputs);
+                    for c in diff.changed {
+                        bus.publish(crate::api::events::DomainEvent::SessionPlanStepChanged {
+                            session_id,
+                            step_hash:   c.step_hash,
+                            prev_status: c.prev_status,
+                            next_status: c.next_status,
+                            note:        None,
+                        });
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "set_plan publish skipped: read_plan_steps_raw failed for {session_id}: {e}"
+                    );
                 }
             }
         }
