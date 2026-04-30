@@ -1,4 +1,4 @@
-use galvolite::worktree::{add_worktree, derive_branch_name};
+use galvolite::worktree::{add_worktree, derive_branch_name, remove_worktree};
 use std::process::Command;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -45,4 +45,16 @@ fn add_worktree_retries_on_branch_collision() {
         .status().unwrap();
     let (_wt, branch) = add_worktree(tmp.path(), id, "HEAD").expect("retry must succeed");
     assert_eq!(branch, "galvolite/aaaaaaaa-2");
+}
+
+#[test]
+fn remove_worktree_deletes_dir_and_is_idempotent() {
+    let tmp = TempDir::new().unwrap();
+    init_repo(tmp.path());
+    let id = Uuid::new_v4();
+    let (wt, _branch) = add_worktree(tmp.path(), id, "HEAD").unwrap();
+    assert!(wt.exists());
+    remove_worktree(&wt).expect("first remove ok");
+    assert!(!wt.exists(), "dir should be gone");
+    remove_worktree(&wt).expect("second remove ok (idempotent)");
 }

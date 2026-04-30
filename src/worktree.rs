@@ -52,3 +52,28 @@ pub fn add_worktree(
         "git worktree add: branch collision unresolved after 3 attempts: {last_stderr}"
     )))
 }
+
+/// `git -C <repo> worktree remove --force <path>`. Idempotent: a missing
+/// worktree dir is treated as success.
+pub fn remove_worktree(worktree_path: &Path) -> Result<()> {
+    if !worktree_path.exists() {
+        return Ok(());
+    }
+    // Repo root is two levels up: <repo>/.galvolite/worktrees/<id>/
+    let repo_root = worktree_path
+        .ancestors()
+        .nth(3)
+        .ok_or_else(|| Error::Config(format!("worktree path too shallow: {worktree_path:?}")))?;
+    let out = Command::new("git")
+        .args([
+            "-C", repo_root.to_str().ok_or_else(|| Error::Config("repo path not utf-8".into()))?,
+            "worktree", "remove", "--force",
+            worktree_path.to_str().ok_or_else(|| Error::Config("worktree path not utf-8".into()))?,
+        ])
+        .output()
+        .map_err(|e| Error::io(repo_root, e))?;
+    if !out.status.success() {
+        let _ = std::fs::remove_dir_all(worktree_path);
+    }
+    Ok(())
+}
