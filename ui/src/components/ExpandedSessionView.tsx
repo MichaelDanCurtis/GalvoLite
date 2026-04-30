@@ -123,18 +123,15 @@ export function ExpandedSessionView({
       setPlanSteps((prev) => {
         const idx = prev.findIndex((s) => s.hash === e.step_hash);
         if (idx === -1) {
-          // TODO(sub-plan-5): race — `plan_step_changed` for a step not yet in
-          // `planSteps` is silently dropped. Real path today: initial fetch
-          // resolves AFTER the event arrives, and the fetch's snapshot
-          // includes the row, so the state reconciles. But if a NEW step is
-          // appended AFTER the fetch resolves and before we subscribe (or
-          // during a reconnect window), the update will be lost until the
-          // next `plan_replaced`. Sub-plan 5's `plan_check_step` writer
-          // should either: (a) always accompany each `plan_step_changed`
-          // with an implied `plan_replaced` on first reference, or (b) this
-          // component should refetch `plan_steps` on unknown-hash updates.
-          // Not fixing in Sub-plan 4 because the writer shape is still
-          // unconfirmed.
+          // Unknown hash — likely a step appended after our initial fetch
+          // resolved but before this WS subscription started receiving
+          // frames (or a `set_plan` we missed during a reconnect window).
+          // Refetch the authoritative list. On failure, leave UI as-is;
+          // the next `plan_replaced` will fully refresh.
+          api
+            .getSessionPlanSteps(session.id)
+            .then((rows) => setPlanSteps(rows))
+            .catch(() => { /* ignore; next plan_replaced will refresh */ });
           return prev;
         }
         const next = prev.slice();
