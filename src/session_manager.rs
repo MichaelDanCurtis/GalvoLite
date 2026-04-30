@@ -655,7 +655,37 @@ fn recover_non_terminal_sessions(db: &Db, bus: &EventBroadcaster) -> Result<()> 
                 tracing::warn!("failed to write system.recovered for {sid}: {e}");
             }
         } else {
-            // Dead PTY path is Task 11.
+            let recent = db.read_recent_events(sid, 20).unwrap_or_default();
+            // Stamp an auto-recovery handoff so the operator has a starting
+            // breadcrumb when they re-open this session.
+            if let Ok(s) = db.get_session(sid) {
+                let dir = HandoffDir::new(
+                    std::path::Path::new(&s.worktree_path).join(".galvolite/handoffs"),
+                );
+                match crate::handoff::write_auto_recovery_handoff(&dir, sid, &recent) {
+                    Ok(p) => {
+                        if let Err(e) = db.set_session_handoff_path(sid, &p.to_string_lossy()) {
+                            tracing::warn!("failed to stamp handoff_path for {sid}: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("auto-recovery handoff write failed for {sid}: {e}")
+                    }
+                }
+            }
+            if let Err(e) = crate::state::apply_event_with_bus(
+                db,
+                sid,
+                bus,
+                crate::state::EventInput {
+                    source: crate::state::Source::System,
+                    kind: "system.session_orphaned".into(),
+                    payload: serde_json::json!({ "reason": "pty_dead_at_restart", "pid": pid }),
+                    dedup_key: Some(format!("session-orphaned:{sid}")),
+                },
+            ) {
+                tracing::warn!("failed to write system.session_orphaned for {sid}: {e}");
+            }
         }
     }
     Ok(())

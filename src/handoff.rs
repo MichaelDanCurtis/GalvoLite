@@ -62,6 +62,33 @@ pub const REQUIRED_SECTIONS: &[&str] = &[
 
 const PLACEHOLDER_TOKENS: &[&str] = &["TBD", "TODO", "<fill in>", "XXX"];
 
+/// Generate a minimal recovery-handoff markdown document from the events log
+/// when a session was found dead at restart. Returns the absolute path of the
+/// file written under `<handoff_dir>/<session>/`.
+pub fn write_auto_recovery_handoff(
+    handoff_dir: &HandoffDir,
+    session_id: uuid::Uuid,
+    last_events: &[serde_json::Value],
+) -> std::io::Result<std::path::PathBuf> {
+    let session_dir = handoff_dir.root().join(session_id.to_string());
+    std::fs::create_dir_all(&session_dir)?;
+    let path = session_dir.join(format!(
+        "auto-recovery-{}.md",
+        chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
+    ));
+    let mut body = String::new();
+    body.push_str("# Auto-Recovery Handoff\n\n");
+    body.push_str("Session was found in a non-terminal state at GalvoLite restart with no live PTY.\n\n");
+    body.push_str("## Last events\n\n");
+    for e in last_events.iter().take(20) {
+        let kind = e.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
+        let ts = e.get("ts").and_then(|v| v.as_str()).unwrap_or("?");
+        body.push_str(&format!("- `{ts}` · {kind}\n"));
+    }
+    std::fs::write(&path, body)?;
+    Ok(path)
+}
+
 pub fn validate_handoff_content(body: &str) -> Result<()> {
     // Placeholder scan (runs first so placeholder errors surface before missing-section errors)
     for tok in PLACEHOLDER_TOKENS {
