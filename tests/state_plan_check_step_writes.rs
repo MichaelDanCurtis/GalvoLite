@@ -50,10 +50,26 @@ async fn plan_check_step_updates_one_row_and_emits_step_changed() {
 async fn plan_check_step_with_unknown_title_is_a_no_op() {
     let app = common::test_app_with_bus();
     let sid = common::seed_session_in_state(&app.db, SessionState::Idle).0;
+    let mut rx = app.mgr.subscribe_events();
     let outcome = apply_event_with_bus(&app.db, sid, app.mgr.event_bus(), EventInput {
         source: Source::Mcp, kind: "mcp.plan_check_step".into(),
         payload: serde_json::json!({ "title": "missing", "status": "done" }),
         dedup_key: None,
     });
     assert!(outcome.is_ok());
+
+    // Drain the bus for a short window; SessionEventAppended is fine, but
+    // SessionPlanStepChanged is forbidden — there's no row for "missing".
+    let mut saw_phantom = false;
+    for _ in 0..6 {
+        match tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await {
+            Ok(Ok(galvolite::api::events::DomainEvent::SessionPlanStepChanged { .. })) => {
+                saw_phantom = true;
+                break;
+            }
+            Ok(Ok(_)) => continue,
+            _ => break,
+        }
+    }
+    assert!(!saw_phantom, "no SessionPlanStepChanged should fire when the target step doesn't exist");
 }

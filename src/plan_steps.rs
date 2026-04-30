@@ -64,6 +64,22 @@ pub struct PlanStepStatusChange {
     pub next_status:  String,
 }
 
+/// Resolve a step's stable hash from an MCP payload. Prefers an explicit
+/// `step_hash` field; falls back to hashing the `title` via `step_hash_for`.
+/// Returns None when neither is present (caller treats as no-op).
+pub fn resolve_step_hash(payload: &serde_json::Value) -> Option<String> {
+    payload
+        .get("step_hash")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .or_else(|| {
+            payload
+                .get("title")
+                .and_then(|v| v.as_str())
+                .map(step_hash_for)
+        })
+}
+
 /// Hash a normalized title — collapse runs of whitespace, trim, lowercase
 /// not applied (titles are case-sensitive). 16 hex chars from sha256.
 pub fn step_hash_for(title: &str) -> String {
@@ -178,5 +194,23 @@ mod tests {
         assert!(changed.contains(&("h1", "pending", "done")));
         assert!(diff.added.iter().any(|s| s.step_hash == "h3"));
         assert!(diff.removed.iter().any(|s| s == "h2"));
+    }
+
+    #[test]
+    fn resolve_step_hash_prefers_explicit_field() {
+        let p = serde_json::json!({ "step_hash": "abc", "title": "ignored" });
+        assert_eq!(resolve_step_hash(&p), Some("abc".to_string()));
+    }
+
+    #[test]
+    fn resolve_step_hash_falls_back_to_title_hash() {
+        let p = serde_json::json!({ "title": "Hello world" });
+        assert_eq!(resolve_step_hash(&p), Some(step_hash_for("Hello world")));
+    }
+
+    #[test]
+    fn resolve_step_hash_returns_none_when_both_missing() {
+        let p = serde_json::json!({ "status": "done" });
+        assert_eq!(resolve_step_hash(&p), None);
     }
 }

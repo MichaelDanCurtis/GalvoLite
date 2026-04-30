@@ -287,11 +287,9 @@ fn apply_column_side_effects(
         }
         "mcp.plan_check_step" => {
             // Resolve target by step_hash (preferred) or by hashing title.
-            let hash: Option<String> = input.payload
-                .get("step_hash").and_then(|v| v.as_str()).map(str::to_string)
-                .or_else(|| input.payload.get("title").and_then(|v| v.as_str())
-                    .map(crate::plan_steps::step_hash_for));
-            let Some(hash) = hash else { return Ok(()); };
+            let Some(hash) = crate::plan_steps::resolve_step_hash(&input.payload) else {
+                return Ok(());
+            };
             let status_in = input.payload.get("status").and_then(|v| v.as_str()).unwrap_or("pending");
             let status = crate::plan_steps::PlanStepStatus::from_input_str(status_in)
                 .map(|s| s.as_db_str().to_string())
@@ -382,25 +380,15 @@ pub fn apply_event_with_bus(
     // test asserts so); a real DB error is logged but does not block the
     // event from committing.
     let prior_step_status: Option<(String, String)> = if kind == "mcp.plan_check_step" {
-        let hash = input
-            .payload
-            .get("step_hash")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .or_else(|| {
-                input
-                    .payload
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .map(crate::plan_steps::step_hash_for)
-            });
-        hash.and_then(|h| match db.read_plan_step_status(session_id, &h) {
-            Ok(opt) => opt.map(|s| (h, s)),
-            Err(e) => {
-                tracing::warn!(
-                    "plan_check_step prior-status read failed for {session_id}/{h}: {e}"
-                );
-                None
+        crate::plan_steps::resolve_step_hash(&input.payload).and_then(|h| {
+            match db.read_plan_step_status(session_id, &h) {
+                Ok(opt) => opt.map(|s| (h, s)),
+                Err(e) => {
+                    tracing::warn!(
+                        "plan_check_step prior-status read failed for {session_id}/{h}: {e}"
+                    );
+                    None
+                }
             }
         })
     } else {
