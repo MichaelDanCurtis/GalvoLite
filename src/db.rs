@@ -12,12 +12,14 @@ pub use crate::state::SessionState;
 
 const SCHEMA_V1: &str = include_str!("../migrations/0001_initial.sql");
 const SCHEMA_V2: &str = include_str!("../migrations/0002_hooks_mcp_foundations.sql");
+const SCHEMA_V3: &str = include_str!("../migrations/0003_session_spawn.sql");
 
 /// (version, sql_body). Order matters: applied lowest-to-highest. Each entry
 /// is applied iff the version is not present in `schema_version`.
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, SCHEMA_V1),
     (2, SCHEMA_V2),
+    (3, SCHEMA_V3),
 ];
 
 #[derive(Clone)]
