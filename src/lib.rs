@@ -19,5 +19,6 @@ pub mod session_registry;
 pub mod plan_steps;
 pub mod spawn_config;
 pub mod state;
+pub mod worktree;
 
 pub use error::{Error, Result};
