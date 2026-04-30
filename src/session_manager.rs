@@ -636,7 +636,7 @@ fn recover_non_terminal_sessions(db: &Db, bus: &EventBroadcaster) -> Result<()> 
                 session_id: sid,
                 last_events: serde_json::Value::Array(recent),
             });
-            let _ = crate::state::apply_event_with_bus(
+            if let Err(e) = crate::state::apply_event_with_bus(
                 db,
                 sid,
                 bus,
@@ -644,12 +644,16 @@ fn recover_non_terminal_sessions(db: &Db, bus: &EventBroadcaster) -> Result<()> 
                     source: crate::state::Source::System,
                     kind: "system.recovered".into(),
                     payload: serde_json::json!({ "pid": pid, "alive": true }),
+                    // ms-precision so two restarts in the same wall-clock second
+                    // don't dedup-collide and silently drop the second marker.
                     dedup_key: Some(format!(
                         "recovered:{sid}:{}",
-                        chrono::Utc::now().timestamp()
+                        chrono::Utc::now().timestamp_millis()
                     )),
                 },
-            );
+            ) {
+                tracing::warn!("failed to write system.recovered for {sid}: {e}");
+            }
         } else {
             // Dead PTY path is Task 11.
         }
