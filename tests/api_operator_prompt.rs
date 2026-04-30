@@ -105,6 +105,10 @@ async fn dropping_register_and_wait_future_clears_waiters_map() {
         };
         pin_mut!(fut);
         // Poll once → registers prompt_id, returns Pending on the timeout/rx await.
+        // NOTE: relies on register_and_wait being synchronous up to the first
+        // await (currently the tokio::time::timeout). If a refactor adds an
+        // .await before the map insertion, this test could pass spuriously
+        // even if PromptGuard::Drop is broken.
         let p = poll!(fut.as_mut());
         assert!(matches!(p, std::task::Poll::Pending));
         assert_eq!(reg.pending_count().await, 1);
