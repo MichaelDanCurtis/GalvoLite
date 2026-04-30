@@ -38,9 +38,10 @@ fn ev(kind: &str) -> EventInput {
 }
 
 #[test]
-fn signal_status_working_transitions_to_working() {
+fn user_prompt_submit_transitions_idle_to_working() {
     let (db, _t, sid) = open_db_with_session();
-    let out = apply_event(&db, sid, ev("signal.STATUS:WORKING")).unwrap();
+    apply_event(&db, sid, ev("system.session_started")).unwrap();
+    let out = apply_event(&db, sid, ev("hook.UserPromptSubmit")).unwrap();
     assert_eq!(out.next_state, SessionState::Working);
     assert!(!out.deduped);
 
@@ -56,40 +57,29 @@ fn signal_status_working_transitions_to_working() {
 }
 
 #[test]
-fn signal_status_complete_transitions_working_to_idle() {
+fn stop_max_retries_transitions_working_to_idle() {
     let (db, _t, sid) = open_db_with_session();
-    apply_event(&db, sid, ev("signal.STATUS:WORKING")).unwrap();
-    let out = apply_event(&db, sid, ev("signal.STATUS:COMPLETE")).unwrap();
+    apply_event(&db, sid, ev("system.session_started")).unwrap();
+    apply_event(&db, sid, ev("hook.UserPromptSubmit")).unwrap();
+    let out = apply_event(&db, sid, ev("system.stop_max_retries")).unwrap();
     assert_eq!(out.prev_state, Some(SessionState::Working));
     assert_eq!(out.next_state, SessionState::Idle);
 }
 
 #[test]
-fn signal_attention_needed_transitions_to_needs_attention() {
+fn attention_needed_transitions_to_needs_attention() {
     let (db, _t, sid) = open_db_with_session();
-    apply_event(&db, sid, ev("signal.STATUS:WORKING")).unwrap();
-    let out = apply_event(&db, sid, ev("signal.ATTENTION:NEEDED")).unwrap();
+    apply_event(&db, sid, ev("system.session_started")).unwrap();
+    apply_event(&db, sid, ev("hook.UserPromptSubmit")).unwrap();
+    let out = apply_event(&db, sid, ev("system.attention_needed")).unwrap();
     assert_eq!(out.next_state, SessionState::NeedsAttention);
-}
-
-#[test]
-fn logging_only_kinds_do_not_change_state() {
-    let (db, _t, sid) = open_db_with_session();
-    apply_event(&db, sid, ev("signal.STATUS:WORKING")).unwrap();
-    let out = apply_event(&db, sid, ev("signal.HANDOFF:READY")).unwrap();
-    assert_eq!(out.prev_state, Some(SessionState::Working));
-    assert_eq!(
-        out.next_state,
-        SessionState::Working,
-        "HANDOFF:READY is logged but doesn't change state"
-    );
 }
 
 #[test]
 fn dedup_key_collision_returns_deduped_outcome_no_second_row() {
     let (db, _t, sid) = open_db_with_session();
-    let mut e = ev("signal.STATUS:WORKING");
-    e.dedup_key = Some("sig-1".into());
+    let mut e = ev("hook.UserPromptSubmit");
+    e.dedup_key = Some("hook-1".into());
 
     let first = apply_event(&db, sid, e.clone()).unwrap();
     assert!(!first.deduped);
@@ -115,8 +105,9 @@ fn dedup_key_collision_returns_deduped_outcome_no_second_row() {
 #[test]
 fn event_row_records_prev_and_next_state() {
     let (db, _t, sid) = open_db_with_session();
-    apply_event(&db, sid, ev("signal.STATUS:WORKING")).unwrap();
-    apply_event(&db, sid, ev("signal.STATUS:COMPLETE")).unwrap();
+    apply_event(&db, sid, ev("system.session_started")).unwrap();
+    apply_event(&db, sid, ev("hook.UserPromptSubmit")).unwrap();
+    apply_event(&db, sid, ev("system.stop_max_retries")).unwrap();
 
     let conn = db.pool().get().unwrap();
     let mut stmt = conn
@@ -128,22 +119,24 @@ fn event_row_records_prev_and_next_state() {
         .collect::<Result<_, _>>()
         .unwrap();
 
-    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), 3);
     assert_eq!(rows[0].0.as_deref(), Some("starting"));
-    assert_eq!(rows[0].1.as_deref(), Some("working"));
-    assert_eq!(rows[1].0.as_deref(), Some("working"));
-    assert_eq!(rows[1].1.as_deref(), Some("idle"));
+    assert_eq!(rows[0].1.as_deref(), Some("idle"));
+    assert_eq!(rows[1].0.as_deref(), Some("idle"));
+    assert_eq!(rows[1].1.as_deref(), Some("working"));
+    assert_eq!(rows[2].0.as_deref(), Some("working"));
+    assert_eq!(rows[2].1.as_deref(), Some("idle"));
 }
 
 #[test]
 fn terminal_state_rejects_further_transitions() {
     let (db, _t, sid) = open_db_with_session();
     apply_event(&db, sid, ev("system.session_ended")).unwrap();
-    let err = apply_event(&db, sid, ev("signal.STATUS:WORKING")).unwrap_err();
+    let err = apply_event(&db, sid, ev("hook.UserPromptSubmit")).unwrap_err();
     match err {
         Error::TerminalState { session_id, kind } => {
             assert_eq!(session_id, sid.to_string());
-            assert_eq!(kind, "signal.STATUS:WORKING");
+            assert_eq!(kind, "hook.UserPromptSubmit");
         }
         other => panic!("expected TerminalState, got {other:?}"),
     }

@@ -4,23 +4,21 @@
 //! emits no I/O. The driver (task 15) observes state transitions and performs
 //! side effects (write prompt, send /clear, write handoff, etc.).
 
-use crate::signals::Signal;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RitualState {
-    /// Newly constructed, no signals seen yet.
+    /// Newly constructed.
     Idle,
     /// Normal operation.
     Working,
-    /// User (or autopilot) has requested a handoff; waiting for `[HANDOFF:READY]`.
+    /// User (or autopilot) has requested a handoff.
     AwaitingHandoffReady,
     /// Handoff validated; about to send `/clear`.
     Clearing,
     /// `/clear` sent; about to send restore prompt.
     Restoring,
-    /// Claude emitted `[ATTENTION:NEEDED ...]`. User must respond.
+    /// Operator/MCP requested attention. User must respond.
     Attention,
-    /// `[STATUS:COMPLETE]` received. Terminal (session ready for PR step).
+    /// Session complete (terminal).
     Complete,
     /// Something went wrong; human attention required.
     Error(String),
@@ -28,7 +26,6 @@ pub enum RitualState {
 
 #[derive(Debug, Clone)]
 pub enum RitualEvent {
-    Signal(Signal),
     /// User (or autopilot) asks to initiate the ritual.
     RequestHandoff,
     /// Driver has sent `/clear`.
@@ -64,28 +61,16 @@ impl RitualMachine {
     pub fn on_event(&mut self, ev: RitualEvent) {
         use RitualEvent as E;
         use RitualState as S;
-        use Signal as Sg;
 
         let next = match (self.state.clone(), ev) {
-            (S::Idle, E::Signal(Sg::StatusWorking)) => S::Working,
-
             (S::Working, E::RequestHandoff) => S::AwaitingHandoffReady,
-
-            (S::AwaitingHandoffReady, E::Signal(Sg::HandoffReady)) => S::Clearing,
-            (S::AwaitingHandoffReady, E::Signal(Sg::HandoffBlocked { reason })) => {
-                S::Error(format!("handoff blocked: {reason}"))
-            }
+            (S::Idle, E::RequestHandoff) => S::AwaitingHandoffReady,
 
             (S::Clearing, E::ClearSent) => S::Restoring,
             (S::Restoring, E::RestorePromptSent) => S::Restoring,
-            (S::Restoring, E::Signal(Sg::StatusWorking)) => S::Working,
 
-            (_, E::Signal(Sg::AttentionNeeded { .. })) => S::Attention,
             (S::Attention, E::AttentionResolved) => S::Working,
 
-            (S::Working, E::Signal(Sg::AttentionContext)) => S::AwaitingHandoffReady,
-
-            (_, E::Signal(Sg::StatusComplete)) => S::Complete,
             (_, E::Abort(r)) => S::Error(r),
 
             (s, _) => s,
@@ -173,42 +158,13 @@ impl RitualDriver {
         self.fx
             .inject_prompt(
                 "Handoff time. Follow the Handoff Protocol in your CLAUDE.md. \
-                 Write your handoff file now, then emit [HANDOFF:READY] on its own line.",
+                 Call `write_handoff({summary, next_steps})` to record the continuation.",
             )
             .await;
     }
 
-    pub async fn on_signal(&self, sig: Signal) {
-        let sig_clone = sig.clone();
-        self.machine.lock().await.on_event(RitualEvent::Signal(sig));
-
-        // Drive follow-up side effects based on new state.
-        let state = self.machine.lock().await.state().clone();
-        if state == RitualState::Clearing && sig_clone == Signal::HandoffReady {
-            if let Err(e) = self.validate_latest_handoff().await {
-                self.fx
-                    .inject_prompt(&format!(
-                        "Handoff validation failed: {e}. Fix the handoff file and re-emit [HANDOFF:READY]."
-                    ))
-                    .await;
-                // Revert to AwaitingHandoffReady so next HandoffReady retries.
-                let mut m = self.machine.lock().await;
-                m.state = RitualState::AwaitingHandoffReady;
-                return;
-            }
-            self.fx.send_clear().await;
-            self.machine.lock().await.on_event(RitualEvent::ClearSent);
-            let restore = self.build_restore_prompt().await;
-            self.fx.inject_prompt(&restore).await;
-            self.machine
-                .lock()
-                .await
-                .on_event(RitualEvent::RestorePromptSent);
-        }
-    }
-
-    /// After [HANDOFF:READY], driver calls this to confirm the file actually exists
-    /// and is well-formed. If validation fails, driver aborts with an error state.
+    /// Driver calls this to confirm the latest recorded handoff file actually
+    /// exists and is well-formed.
     pub async fn validate_latest_handoff(&self) -> std::result::Result<(), crate::error::Error> {
         let path = self
             .latest_handoff_path
@@ -231,7 +187,7 @@ impl RitualDriver {
             "Read `{path}`. You are the next cycle of the same session. \
              Resume from the Continuation Prompt section. \
              You have no memory of prior cycles — trust only the handoff file and the project state. \
-             Emit [STATUS:WORKING] once you have read and understood the handoff."
+             Call `status_report({{kind: 'working'}})` once you have read and understood the handoff."
         )
     }
 

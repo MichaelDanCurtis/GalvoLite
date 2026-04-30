@@ -9,7 +9,6 @@
 //!   - The async world interacts solely via those channels + a kill flag.
 
 use crate::error::{Error, Result};
-use crate::signals::LineBuffer;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -99,12 +98,61 @@ pub(crate) type SharedMaster = Arc<StdMutex<Box<dyn MasterPty + Send>>>;
 
 pub struct PtyHandle {
     pub pid: u32,
-    stdout_rx: mpsc::Receiver<String>,
     pub(crate) scrollback: Arc<Scrollback>,
     pub(crate) stdin_tx: mpsc::Sender<Vec<u8>>,
     pub(crate) kill_flag: Arc<AtomicBool>,
     pub(crate) master: SharedMaster,
     child: Box<dyn portable_pty::Child + Send + Sync>,
+}
+
+/// A clonable "write + kill + resize" view of the underlying pty. Exposed
+/// to callers (session_manager, ritual fx) that need to drive the child
+/// without owning the `PtyHandle` itself (which lives in the bg watch task
+/// so its `Drop` cleans up the child on natural exit).
+#[derive(Clone)]
+pub struct PtyHandleShared {
+    pub(crate) stdin_tx: mpsc::Sender<Vec<u8>>,
+    pub(crate) kill_flag: Arc<AtomicBool>,
+    pub(crate) pid: u32,
+    pub(crate) master: SharedMaster,
+    pub(crate) scrollback: Arc<Scrollback>,
+}
+
+impl PtyHandleShared {
+    pub async fn write(&self, bytes: &[u8]) -> Result<()> {
+        self.stdin_tx
+            .send(bytes.to_vec())
+            .await
+            .map_err(|_| Error::Pty("stdin channel closed".into()))
+    }
+
+    pub async fn write_str(&self, s: &str) -> Result<()> {
+        self.write(s.as_bytes()).await
+    }
+
+    pub fn kill(&self) {
+        self.kill_flag.store(true, Ordering::Relaxed);
+        if self.pid > 0 {
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &self.pid.to_string()])
+                .status();
+        }
+    }
+
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
+        self.master
+            .lock()
+            .unwrap()
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| Error::Pty(format!("resize: {e}")))?;
+        self.scrollback.resize(rows, cols);
+        Ok(())
+    }
 }
 
 impl PtyHandle {
@@ -147,37 +195,20 @@ impl PtyHandle {
 
         let kill_flag = Arc::new(AtomicBool::new(false));
 
-        // Reader thread. Splits a single byte stream into two consumers:
-        //   * `scrollback` (broadcast + ring buffer): every byte verbatim,
-        //     for the terminal WebSocket — preserves ANSI/cursor sequences
-        //     that line-based reassembly would destroy. The ring buffer
-        //     lets a reattaching client see the child's current screen
-        //     state instead of a blank terminal.
-        //   * `stdout_tx` (mpsc): complete lines only, for the signal
-        //     parser in `SignalPump`.
-        // Signals still appear in the raw byte stream; the terminal sees
-        // them alongside other output, which matches PTY semantics.
-        let (stdout_tx, stdout_rx) = mpsc::channel::<String>(256);
+        // Reader thread: every byte goes to `scrollback` (broadcast + screen
+        // emulator), which is what the terminal WebSocket serves. Hooks/MCP
+        // tools have replaced the legacy stdout signal-parsing pipeline, so
+        // there is no longer a line-buffer consumer.
         let scrollback = Arc::new(Scrollback::new(INIT_ROWS, INIT_COLS));
         let scrollback_reader = scrollback.clone();
         let kill_reader = kill_flag.clone();
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
-            let mut line_buf = LineBuffer::new();
             while !kill_reader.load(Ordering::Relaxed) {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        // Push to scrollback first so UI rendering is not
-                        // blocked by slow line-channel consumers.
                         scrollback_reader.push(&buf[..n]);
-                        let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
-                        let lines = line_buf.feed(&chunk);
-                        for line in lines {
-                            if stdout_tx.blocking_send(line).is_err() {
-                                return;
-                            }
-                        }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(_) => break,
@@ -200,7 +231,6 @@ impl PtyHandle {
 
         Ok(Self {
             pid,
-            stdout_rx,
             scrollback,
             stdin_tx,
             kill_flag,
@@ -209,9 +239,36 @@ impl PtyHandle {
         })
     }
 
-    /// Next complete line of stdout, or `None` if the stream has ended.
-    pub async fn next_line(&mut self) -> Option<String> {
-        self.stdout_rx.recv().await
+    /// Build a clonable shared view of this handle's write/kill/resize/
+    /// scrollback state. The owner of `PtyHandle` keeps the `child` so its
+    /// `Drop` can clean up; consumers get a `PtyHandleShared`.
+    pub fn shared(&self) -> PtyHandleShared {
+        PtyHandleShared {
+            stdin_tx: self.stdin_tx.clone(),
+            kill_flag: self.kill_flag.clone(),
+            pid: self.pid,
+            master: self.master.clone(),
+            scrollback: self.scrollback.clone(),
+        }
+    }
+
+    /// Wait until the child exits (or the kill flag is raised). Polls
+    /// `child.try_wait()` from a `spawn_blocking` thread because
+    /// `portable_pty::Child::wait` is sync; tokio polls the kill flag
+    /// alongside it so a kill request returns promptly.
+    pub async fn wait_exit(&mut self) {
+        loop {
+            if self.kill_flag.load(Ordering::Relaxed) {
+                return;
+            }
+            match self.child.try_wait() {
+                Ok(Some(_status)) => return,
+                Ok(None) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                }
+                Err(_) => return,
+            }
+        }
     }
 
     /// Subscribe to the raw byte stream from the pty master, returning the
@@ -263,164 +320,6 @@ impl Drop for PtyHandle {
     fn drop(&mut self) {
         self.kill_flag.store(true, Ordering::Relaxed);
         let _ = self.child.kill();
-    }
-}
-
-use crate::db::Db;
-use crate::signals::{parse_signal, Signal};
-use uuid::Uuid;
-
-/// Shared, mutable cycle-id slot threaded into [`SignalPump::start`].
-/// The recording task reads this on every signal so rotating the cycle
-/// (e.g. on STATUS:COMPLETE) correctly re-attributes subsequent signals.
-pub type CycleSlot = Arc<StdMutex<Option<Uuid>>>;
-
-/// Wraps a `PtyHandle`. Runs a background task that reads complete lines from
-/// the pty, parses them for signals, persists signals to the db, and forwards
-/// parsed signals to the ritual driver via an mpsc channel.
-///
-/// Terminal output is NOT re-broadcast here — the [`Scrollback`] owned by
-/// `PtyHandle` is what the WebSocket serves. Signals therefore also appear
-/// verbatim in the terminal view (matching PTY semantics).
-pub struct SignalPump {
-    signal_rx: mpsc::Receiver<Signal>,
-    scrollback: Arc<Scrollback>,
-    handle: PtyHandleShared,
-    _task: tokio::task::JoinHandle<()>,
-}
-
-/// A clonable "write + kill + resize" view of the underlying pty.
-#[derive(Clone)]
-pub struct PtyHandleShared {
-    stdin_tx: mpsc::Sender<Vec<u8>>,
-    kill_flag: Arc<AtomicBool>,
-    pid: u32,
-    master: SharedMaster,
-    scrollback: Arc<Scrollback>,
-}
-
-impl PtyHandleShared {
-    pub async fn write(&self, bytes: &[u8]) -> Result<()> {
-        self.stdin_tx
-            .send(bytes.to_vec())
-            .await
-            .map_err(|_| Error::Pty("stdin channel closed".into()))
-    }
-
-    pub async fn write_str(&self, s: &str) -> Result<()> {
-        self.write(s.as_bytes()).await
-    }
-
-    pub fn kill(&self) {
-        self.kill_flag.store(true, Ordering::Relaxed);
-        if self.pid > 0 {
-            let _ = std::process::Command::new("kill")
-                .args(["-TERM", &self.pid.to_string()])
-                .status();
-        }
-    }
-
-    pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
-        self.master
-            .lock()
-            .unwrap()
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| Error::Pty(format!("resize: {e}")))?;
-        self.scrollback.resize(rows, cols);
-        Ok(())
-    }
-}
-
-impl SignalPump {
-    pub fn start(mut pty: PtyHandle, db: Db, session_id: Uuid, cycle_id: CycleSlot) -> Self {
-        let (signal_tx, signal_rx) = mpsc::channel::<Signal>(64);
-        let scrollback = pty.scrollback.clone();
-        let shared = PtyHandleShared {
-            stdin_tx: pty.stdin_tx.clone(),
-            kill_flag: pty.kill_flag.clone(),
-            pid: pty.pid,
-            master: pty.master.clone(),
-            scrollback: scrollback.clone(),
-        };
-
-        let task = tokio::spawn(async move {
-            while let Some(line) = pty.next_line().await {
-                if let Some(sig) = parse_signal(&line) {
-                    // Legacy: write to the `signals` table for the old API path.
-                    // Sub-plan 5 removes this. The new pipeline below funnels the
-                    // same data through state::apply_event so the events log is
-                    // populated even though hooks/MCP haven't shipped yet.
-                    let cur_cycle = *cycle_id.lock().unwrap();
-                    let _ = db.record_signal(
-                        session_id,
-                        cur_cycle,
-                        sig.kind(),
-                        sig.payload().as_deref(),
-                    );
-
-                    // New funnel path. Source::System because the legacy parser
-                    // is an internal bridge, not a model-chosen MCP tool.
-                    // TODO(sub-plan-5): migrate to apply_event_with_bus once the
-                    // SignalPump has access to an EventBroadcaster. The signal
-                    // pipeline is replaced wholesale in Sub-plan 5, so plumbing
-                    // the bus here now would be wasted churn.
-                    let _ = crate::state::apply_event(
-                        &db,
-                        session_id,
-                        crate::state::EventInput {
-                            source: crate::state::Source::System,
-                            kind: format!("signal.{}", sig.kind()),
-                            payload: serde_json::json!({
-                                "raw_kind": sig.kind(),
-                                "payload": sig.payload(),
-                            }),
-                            // Allow replays (no dedup) — the signals table
-                            // already has its own append history.
-                            dedup_key: None,
-                        },
-                    );
-
-                    if let Signal::RoleSet { role } = &sig {
-                        let _ = db.set_session_role(session_id, role);
-                    }
-                    if signal_tx.send(sig).await.is_err() {
-                        break;
-                    }
-                }
-            }
-        });
-
-        Self {
-            signal_rx,
-            scrollback,
-            handle: shared,
-            _task: task,
-        }
-    }
-
-    pub async fn next_signal(&mut self) -> Option<Signal> {
-        self.signal_rx.recv().await
-    }
-
-    /// Subscribe for future bytes only. Used by tests and callers that
-    /// don't need scrollback replay.
-    pub fn subscribe_output(&self) -> broadcast::Receiver<Vec<u8>> {
-        self.scrollback.subscribe()
-    }
-
-    /// The session-local scrollback handle. Callers use this to atomically
-    /// snapshot the current screen state and subscribe for future bytes.
-    pub fn scrollback(&self) -> Arc<Scrollback> {
-        self.scrollback.clone()
-    }
-
-    pub fn handle(&self) -> PtyHandleShared {
-        self.handle.clone()
     }
 }
 

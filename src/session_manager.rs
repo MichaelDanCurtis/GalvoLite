@@ -10,9 +10,8 @@ use crate::claude_md::{implementation_profile, InjectionPrompt};
 use crate::db::{Db, NewSession, Session};
 use crate::error::{Error, Result};
 use crate::handoff::HandoffDir;
-use crate::pty::{CycleSlot, PtyHandle, PtyHandleShared, PtyOpts, Scrollback, SignalPump};
+use crate::pty::{PtyHandle, PtyHandleShared, PtyOpts, Scrollback};
 use crate::ritual::{PtySideEffects, RitualDriver};
-use crate::signals::Signal;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -24,9 +23,9 @@ struct RunningSession {
     handle: PtyHandleShared,
     scrollback: Arc<Scrollback>,
     /// Current cycle id for this running session. Shared with the
-    /// [`SignalPump`] recording task so rotation on STATUS:COMPLETE
-    /// immediately re-attributes signals to the new cycle.
-    cycle_id: CycleSlot,
+    /// PTY-exit watch task so the cycle can be closed cleanly when the
+    /// child exits naturally or via `kill_session`.
+    cycle_id: Arc<StdMutex<Option<Uuid>>>,
     /// Handoff directory for this session. Stashed so `kill_session` can
     /// look up the latest handoff file when closing the current cycle,
     /// mirroring the natural-exit bg task's behavior.
@@ -213,10 +212,10 @@ impl SessionManager {
             return Err(e);
         }
 
-        let cycle_id_slot: CycleSlot = Arc::new(StdMutex::new(Some(cycle_id)));
-        let pump = SignalPump::start(pty, self.db.clone(), session.id, cycle_id_slot.clone());
-        let handle = pump.handle();
-        let scrollback = pump.scrollback();
+        let cycle_id_slot: Arc<StdMutex<Option<Uuid>>> =
+            Arc::new(StdMutex::new(Some(cycle_id)));
+        let handle = pty.shared();
+        let scrollback = pty.scrollback.clone();
 
         let fx = Arc::new(PtySideEffects::new(handle.clone()));
         let driver = Arc::new(RitualDriver::new(fx));
@@ -256,48 +255,18 @@ impl SessionManager {
             );
         }
 
-        // Spawn background task to drive signals and clean up on exit
+        // Spawn background task that owns the PtyHandle (so its Drop kills
+        // the child on cleanup) and watches for natural exit. Cycles end
+        // here on PTY exit; rotation on STATUS:COMPLETE is gone (replaced
+        // by hooks/MCP).
         let mgr = Arc::clone(self);
         let session_id = session.id;
-        let driver_for_sig = driver.clone();
         let handoff_dir_bg = handoff_dir.clone();
         let cycle_id_slot_bg = cycle_id_slot.clone();
         tokio::spawn(async move {
-            let mut pump = pump;
-            while let Some(sig) = pump.next_signal().await {
-                if matches!(sig, Signal::HandoffReady) {
-                    if let Ok(Some(p)) =
-                        crate::handoff::latest_handoff_for(&handoff_dir_bg, session_id)
-                    {
-                        driver_for_sig
-                            .set_latest_handoff_path(p.to_string_lossy().into())
-                            .await;
-                    }
-                }
-                let is_status_complete = matches!(sig, Signal::StatusComplete);
-                driver_for_sig.on_signal(sig).await;
+            let mut pty_owner = pty;
+            pty_owner.wait_exit().await;
 
-                if is_status_complete {
-                    // End current cycle with latest handoff (if any), then start a new one.
-                    // Conditional end avoids clobbering a kill-path cycle close.
-                    let prev_cycle = cycle_id_slot_bg.lock().unwrap().take();
-                    if let Some(prev) = prev_cycle {
-                        let handoff_path =
-                            crate::handoff::latest_handoff_for(&handoff_dir_bg, session_id)
-                                .ok()
-                                .flatten()
-                                .map(|p| p.to_string_lossy().into_owned());
-                        let _ = mgr.db.end_cycle_if_unended(prev, handoff_path.as_deref());
-                    }
-                    if let Ok(new_cycle) = mgr.db.start_cycle(session_id) {
-                        *cycle_id_slot_bg.lock().unwrap() = Some(new_cycle);
-                    }
-                }
-            }
-
-            // Session process exited — end current cycle, then end session.
-            // Conditional writes guarantee we never overwrite a kill-path
-            // Killed state with a Complete state (TOCTOU-free).
             let prev_cycle = cycle_id_slot_bg.lock().unwrap().take();
             if let Some(prev) = prev_cycle {
                 let handoff_path = crate::handoff::latest_handoff_for(&handoff_dir_bg, session_id)
@@ -571,10 +540,6 @@ impl SessionManager {
             rs.handle.clone()
         };
         handle.write(&bytes).await
-    }
-
-    pub fn get_signals(&self, id: Uuid) -> Result<Vec<crate::db::SignalRow>> {
-        self.db.list_signals_for_session(id)
     }
 
     pub async fn session_ritual_state(

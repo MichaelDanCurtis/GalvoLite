@@ -59,25 +59,10 @@ fn update_session_state_persists() {
     assert_eq!(fetched.state, SessionState::Working);
 }
 
-#[test]
-fn record_signal_and_list() {
-    let (_tmp, db) = open_db();
-    let proj = db.insert_project(NewProject {
-        name: "p".into(), path: "/tmp/p".into(), remote_url: None,
-    }).unwrap();
-    let s = db.insert_session(NewSession {
-        project_id: proj.id, role: "implementation".into(),
-        branch: None, worktree_path: "/tmp/p".into(),
-        task_summary: "t".into(), parent_session_id: None,
-    }).unwrap();
-
-    db.record_signal(s.id, None, "STATUS:WORKING", None).unwrap();
-    db.record_signal(s.id, None, "HANDOFF:READY", None).unwrap();
-
-    let signals = db.list_signals_for_session(s.id).unwrap();
-    assert_eq!(signals.len(), 2);
-    assert_eq!(signals[0].kind, "STATUS:WORKING");
-}
+// `record_signal_and_list` test removed in Sub-plan 5 Task 12 — the
+// `record_signal` / `list_signals_for_session` helpers no longer exist.
+// The `signals` SQL table is preserved in 0001_initial.sql for backward
+// compat but nothing writes to it.
 
 #[test]
 fn list_sessions_returns_full_data_without_n_plus_one() {

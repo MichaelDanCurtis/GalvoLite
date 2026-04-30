@@ -125,19 +125,6 @@ fn cmd_status(db: &galvolite::db::Db, session: uuid::Uuid) -> Result<()> {
     println!("  Worktree:      {}", s.worktree_path);
     println!("  PID:           {:?}", s.pty_pid);
     println!("  Autopilot:     {}", s.autopilot);
-    let sigs = db.list_signals_for_session(session)?;
-    println!("  Signals ({}):", sigs.len());
-    for sig in sigs.iter().rev().take(10).rev() {
-        println!(
-            "    [{}] {}{}",
-            sig.at.format("%H:%M:%S"),
-            sig.kind,
-            sig.payload
-                .as_deref()
-                .map(|p| format!(" reason=\"{p}\""))
-                .unwrap_or_default()
-        );
-    }
     Ok(())
 }
 

@@ -41,7 +41,7 @@ pub enum Command {
     },
     /// List active sessions.
     Sessions,
-    /// Show a session's state + recent signals.
+    /// Show a session's state.
     Status {
         session: Uuid,
     },

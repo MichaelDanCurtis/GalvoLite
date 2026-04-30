@@ -9,7 +9,7 @@ fn setup_db() -> (Db, tempfile::TempDir) {
 }
 
 #[test]
-fn delete_project_cascade_removes_project_sessions_and_signals() {
+fn delete_project_cascade_removes_project_sessions() {
     let (db, _dir) = setup_db();
 
     let project = db
@@ -20,7 +20,7 @@ fn delete_project_cascade_removes_project_sessions_and_signals() {
         })
         .unwrap();
 
-    let session = db
+    let _session = db
         .insert_session(NewSession {
             project_id: project.id,
             role: "implementation".into(),
@@ -31,17 +31,10 @@ fn delete_project_cascade_removes_project_sessions_and_signals() {
         })
         .unwrap();
 
-    db.record_signal(session.id, None, "TEST", Some("payload")).unwrap();
-
     db.delete_project_cascade(project.id).unwrap();
 
     assert!(db.get_project(project.id).is_err(), "project should be gone");
     assert_eq!(db.list_sessions().unwrap().len(), 0, "sessions purged");
-    assert_eq!(
-        db.list_signals_for_session(session.id).unwrap().len(),
-        0,
-        "signals purged"
-    );
 }
 
 #[test]

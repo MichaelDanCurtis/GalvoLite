@@ -115,7 +115,7 @@ impl FromStr for Source {
 pub struct EventInput {
     pub source: Source,
     /// Free-form event kind, e.g. `"hook.SessionStart"`, `"mcp.set_role"`,
-    /// `"signal.STATUS:WORKING"`, `"system.recovered"`. The convention is
+    /// `"system.session_started"`. The convention is
     /// `"<source>.<name>"` but the funnel does not enforce it — kind is
     /// the dimension `read_events`/dashboard filters on, so use whatever
     /// the consumer expects.
@@ -493,8 +493,8 @@ pub fn apply_event_with_bus(
     Ok(outcome)
 }
 
-/// Transition table from spec §8.6 plus signal-bridge rows. Anything not
-/// matched here is treated as logging-only (state unchanged).
+/// Transition table from spec §8.6. Anything not matched here is treated
+/// as logging-only (state unchanged).
 fn transition(current: SessionState, kind: &str) -> SessionState {
     use SessionState::*;
     match (current, kind) {
@@ -508,21 +508,6 @@ fn transition(current: SessionState, kind: &str) -> SessionState {
         (s,        "hook.SessionEnd")        if !s.is_terminal()               => current,
         (s,        "system.session_errored") if !s.is_terminal()               => Error,
         (_,        "system.session_orphaned")                                  => Error,
-
-        // Signal bridge (System events emitted by SignalPump in Task 8).
-        (Idle,           "signal.STATUS:WORKING")    => Working,
-        (Working,        "signal.STATUS:WORKING")    => Working,
-        (NeedsAttention, "signal.STATUS:WORKING")    => Working,
-        (AwaitingInput,  "signal.STATUS:WORKING")    => Working,
-        (Starting,       "signal.STATUS:WORKING")    => Working,
-
-        (Working,        "signal.STATUS:COMPLETE")   => Idle,
-        (NeedsAttention, "signal.STATUS:COMPLETE")   => Idle,
-        (AwaitingInput,  "signal.STATUS:COMPLETE")   => Idle,
-
-        (Working,        "signal.ATTENTION:NEEDED")  => NeedsAttention,
-        (Idle,           "signal.ATTENTION:NEEDED")  => NeedsAttention,
-        (AwaitingInput,  "signal.ATTENTION:NEEDED")  => NeedsAttention,
 
         // Turn-tracking hooks (Sub-plan 2 Task 8). UserPromptSubmit drives
         // Idle → Working naturally; the spec §8.6 normalization (Task 3)
@@ -574,11 +559,8 @@ fn transition(current: SessionState, kind: &str) -> SessionState {
         (s, "mcp.notify_operator") if !s.is_terminal() => s,
 
         // Everything else logs but doesn't change state. Includes:
-        //  - signal.HANDOFF:READY / HANDOFF:BLOCKED / PLAN:READY / SEED:NEW /
-        //    ROLE:SET / ATTENTION:CONTEXT — model-side annotations
-        //  - mcp.* tool calls (Sub-plan 3)
-        //  - hook.PreCompact / hook.UserPromptSubmit / hook.Stop /
-        //    hook.PostToolUse / hook.Notification (Sub-plan 2)
+        //  - mcp.* tool calls (Sub-plan 3) other than the few that transition above
+        //  - hook.PreCompact / hook.PostToolUse / hook.Notification (Sub-plan 2)
         //  - operator.* (Sub-plan 4)
         _ => current,
     }

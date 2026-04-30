@@ -16,7 +16,6 @@ pub mod pty;
 pub mod ritual;
 pub mod session_manager;
 pub mod session_registry;
-pub mod signals;
 pub mod plan_steps;
 pub mod spawn_config;
 pub mod state;

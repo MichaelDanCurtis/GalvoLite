@@ -4,11 +4,11 @@ use galvolite::error::Error;
 fn terminal_state_variant_displays_with_session_and_kind() {
     let e = Error::TerminalState {
         session_id: "abc-123".into(),
-        kind: "signal.STATUS:WORKING".into(),
+        kind: "hook.UserPromptSubmit".into(),
     };
     let msg = e.to_string();
     assert!(msg.contains("abc-123"), "session id missing in: {msg}");
-    assert!(msg.contains("STATUS:WORKING"), "kind missing in: {msg}");
+    assert!(msg.contains("UserPromptSubmit"), "kind missing in: {msg}");
     assert!(
         msg.contains("terminal"),
         "should mention terminal state: {msg}"

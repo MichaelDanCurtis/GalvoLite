@@ -4,13 +4,11 @@ use galvolite::claude_md::{implementation_profile, InjectionPrompt};
 fn implementation_profile_has_required_sections() {
     let md = implementation_profile();
     assert!(md.contains("# CLAUDE.md"));
-    assert!(md.contains("[STATUS:WORKING]"));
-    assert!(md.contains("[STATUS:COMPLETE]"));
-    assert!(md.contains("[HANDOFF:READY]"));
-    assert!(md.contains("[ATTENTION:NEEDED"));
-    assert!(md.contains("[ATTENTION:CONTEXT]"));
+    assert!(md.contains("status_report"));
+    assert!(md.contains("set_role"));
+    assert!(md.contains("write_handoff"));
+    assert!(md.contains("request_attention"));
     assert!(md.contains(".galvolite/handoffs"));
-    assert!(md.contains("Continuation Prompt"));
 }
 
 #[test]

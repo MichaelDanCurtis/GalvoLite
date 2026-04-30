@@ -59,28 +59,15 @@ fn session_orphaned_transitions_starting_to_error_and_writes_event() {
 fn session_orphaned_works_from_idle_too() {
     let (db, _t, id) = open_db_with_session();
 
-    // Move to a non-Starting state via a signal (Starting → Working then →
-    // Idle via STATUS:COMPLETE). Today system.session_started lands the
-    // session in Working (Sub-plan 1 deviation; Task 3 will normalize this
-    // back to Idle). For this test we just want a non-terminal, non-Starting
-    // state, so use the signal bridge.
+    // Move to a non-Starting state via lifecycle hooks (Starting → Idle
+    // via system.session_started). For this test we just want a
+    // non-terminal, non-Starting state.
     state::apply_event(
         &db,
         id,
         EventInput {
             source: Source::System,
-            kind: "signal.STATUS:WORKING".into(),
-            payload: json!({}),
-            dedup_key: None,
-        },
-    )
-    .unwrap();
-    state::apply_event(
-        &db,
-        id,
-        EventInput {
-            source: Source::System,
-            kind: "signal.STATUS:COMPLETE".into(),
+            kind: "system.session_started".into(),
             payload: json!({}),
             dedup_key: None,
         },

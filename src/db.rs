@@ -153,16 +153,6 @@ pub struct NewSession {
     pub parent_session_id: Option<Uuid>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct SignalRow {
-    pub id: i64,
-    pub session_id: Uuid,
-    pub cycle_id: Option<Uuid>,
-    pub kind: String,
-    pub payload: Option<String>,
-    pub at: DateTime<Utc>,
-}
-
 // ---------- impl ----------
 
 impl Db {
@@ -456,9 +446,8 @@ impl Db {
         Ok(())
     }
 
-    /// Replace the `role` column on a session row. Used by SignalPump when
-    /// it observes a `[ROLE:SET role="..."]` signal so the UI can reflect
-    /// mid-session role transitions.
+    /// Replace the `role` column on a session row. Used by the `set_role`
+    /// MCP tool so the UI can reflect mid-session role transitions.
     /// Returns `Error::SessionNotFound` if no row was updated.
     pub fn set_session_role(&self, id: Uuid, role: &str) -> Result<()> {
         let conn = self.pool.get()?;
@@ -960,50 +949,4 @@ impl Db {
         Ok(rows)
     }
 
-    pub fn record_signal(
-        &self,
-        session_id: Uuid,
-        cycle_id: Option<Uuid>,
-        kind: &str,
-        payload: Option<&str>,
-    ) -> Result<i64> {
-        let conn = self.pool.get()?;
-        conn.execute(
-            "INSERT INTO signals (session_id, cycle_id, kind, payload, at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                session_id.to_string(),
-                cycle_id.map(|u| u.to_string()),
-                kind,
-                payload,
-                Utc::now().to_rfc3339(),
-            ],
-        )?;
-        Ok(conn.last_insert_rowid())
-    }
-
-    pub fn list_signals_for_session(&self, session_id: Uuid) -> Result<Vec<SignalRow>> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, session_id, cycle_id, kind, payload, at
-             FROM signals WHERE session_id = ?1 ORDER BY id ASC",
-        )?;
-        let rows = stmt
-            .query_map(params![session_id.to_string()], |r| {
-                let cycle = match r.get::<_, Option<String>>(2)? {
-                    Some(s) => Some(parse_uuid(&s)?),
-                    None => None,
-                };
-                Ok(SignalRow {
-                    id: r.get(0)?,
-                    session_id: parse_uuid(&r.get::<_, String>(1)?)?,
-                    cycle_id: cycle,
-                    kind: r.get(3)?,
-                    payload: r.get(4)?,
-                    at: parse_datetime(&r.get::<_, String>(5)?)?,
-                })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
 }

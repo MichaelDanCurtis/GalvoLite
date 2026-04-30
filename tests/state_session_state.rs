@@ -58,13 +58,13 @@ fn source_round_trip() {
 #[test]
 fn event_input_payload_is_json_value() {
     let e = EventInput {
-        source: Source::System,
-        kind: "signal.STATUS:WORKING".into(),
-        payload: serde_json::json!({ "raw": "[STATUS:WORKING]" }),
-        dedup_key: Some("sig-1".into()),
+        source: Source::Hook,
+        kind: "hook.UserPromptSubmit".into(),
+        payload: serde_json::json!({ "raw": "user typed something" }),
+        dedup_key: Some("h-1".into()),
     };
-    assert_eq!(e.kind, "signal.STATUS:WORKING");
-    assert_eq!(e.payload["raw"], "[STATUS:WORKING]");
+    assert_eq!(e.kind, "hook.UserPromptSubmit");
+    assert_eq!(e.payload["raw"], "user typed something");
 }
 
 #[test]

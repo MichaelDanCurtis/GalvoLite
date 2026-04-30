@@ -29,7 +29,6 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route("/api/sessions/:id/handoff", post(trigger_handoff))
         .route("/api/sessions/:id/send", post(send_to_session))
         .route("/api/sessions/:id/autopilot", put(set_autopilot))
-        .route("/api/sessions/:id/signals", get(get_signals))
         .route("/api/sessions/:id/events", get(get_events))
         .route("/api/sessions/:id/plan_steps", get(get_plan_steps))
         .route("/api/sessions/:id/terminal", get(terminal_ws))
@@ -233,16 +232,6 @@ async fn set_autopilot(
 ) -> Response {
     match mgr.set_autopilot(id, req.enabled).await {
         Ok(()) => Json(serde_json::json!({"autopilot": req.enabled})).into_response(),
-        Err(e) => err_to_response(e),
-    }
-}
-
-async fn get_signals(
-    State(mgr): State<AppState>,
-    Path(id): Path<uuid::Uuid>,
-) -> Response {
-    match mgr.get_signals(id) {
-        Ok(signals) => Json(signals).into_response(),
         Err(e) => err_to_response(e),
     }
 }
