@@ -176,21 +176,6 @@ impl RitualDriver {
         crate::handoff::validate_handoff_content(&body)
     }
 
-    async fn build_restore_prompt(&self) -> String {
-        let path = self
-            .latest_handoff_path
-            .lock()
-            .await
-            .clone()
-            .unwrap_or_else(|| "<latest handoff>".to_string());
-        format!(
-            "Read `{path}`. You are the next cycle of the same session. \
-             Resume from the Continuation Prompt section. \
-             You have no memory of prior cycles — trust only the handoff file and the project state. \
-             Call `status_report({{kind: 'working'}})` once you have read and understood the handoff."
-        )
-    }
-
     pub async fn resolve_attention(&self) {
         self.machine
             .lock()
