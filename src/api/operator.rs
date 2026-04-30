@@ -21,14 +21,32 @@ use axum::{
     Json,
 };
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::{oneshot, Mutex};
+use std::sync::{Arc, Mutex};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 /// Pending `ask_operator` calls indexed by their freshly-minted `prompt_id`.
 #[derive(Default)]
 pub struct OperatorPromptRegistry {
     waiters: Mutex<HashMap<Uuid, oneshot::Sender<serde_json::Value>>>,
+}
+
+/// RAII guard that removes a `prompt_id` from the waiters map when dropped.
+/// This makes prompt-lifecycle bookkeeping robust to dropped futures (e.g. an
+/// MCP client disconnects mid-call, or a timeout cancels the await), without
+/// any explicit cleanup branches. On the success path the entry has already
+/// been removed by `answer()`, and the guard's `remove` is a no-op.
+struct PromptGuard {
+    reg: Arc<OperatorPromptRegistry>,
+    id: Uuid,
+}
+
+impl Drop for PromptGuard {
+    fn drop(&mut self) {
+        // std::sync::Mutex so Drop is synchronous. Tokio runtime not required.
+        let mut map = self.reg.waiters.lock().expect("waiters mutex poisoned");
+        map.remove(&self.id);
+    }
 }
 
 impl OperatorPromptRegistry {
@@ -41,14 +59,11 @@ impl OperatorPromptRegistry {
     /// elapses. Returns `{answer, timed_out}` JSON either way — the MCP tool
     /// layer passes this straight through to `ToolOutcome::Ok`.
     ///
-    // TODO(plan-4 follow-up): If this ask_operator future is dropped before
-    // register_and_wait resolves (e.g. MCP client disconnect), the waiters-map
-    // entry leaks indefinitely. Fix by wrapping the map insertion in a RAII
-    // guard whose Drop removes the entry — e.g., a `PromptGuard { reg, id }`
-    // that synchronously removes on drop. Combining with the Issue 1 race fix
-    // gives a single authoritative ownership model for prompt_id lifetime.
+    /// Lifetime of the `prompt_id` entry in the waiters map is owned by a
+    /// `PromptGuard` RAII value: it's removed either by `answer()` on the
+    /// happy path, or by the guard's `Drop` on timeout / future-cancel.
     pub async fn register_and_wait(
-        &self,
+        self: &Arc<Self>,
         bus: &EventBroadcaster,
         session_id: Uuid,
         question: String,
@@ -57,7 +72,14 @@ impl OperatorPromptRegistry {
     ) -> serde_json::Value {
         let prompt_id = Uuid::new_v4();
         let (tx, mut rx) = oneshot::channel();
-        self.waiters.lock().await.insert(prompt_id, tx);
+        {
+            let mut map = self.waiters.lock().expect("waiters mutex poisoned");
+            map.insert(prompt_id, tx);
+        }
+        let _guard = PromptGuard {
+            reg: self.clone(),
+            id: prompt_id,
+        };
         bus.publish(DomainEvent::OperatorPrompt {
             prompt_id,
             session_id,
@@ -66,27 +88,11 @@ impl OperatorPromptRegistry {
             timeout_secs,
         });
         let dur = std::time::Duration::from_secs(timeout_secs.unwrap_or(30));
-        let result = tokio::time::timeout(dur, &mut rx).await;
-        match result {
+        match tokio::time::timeout(dur, &mut rx).await {
             Ok(Ok(v)) => v,
-            _ => {
-                // Either elapsed, or the sender was dropped without sending.
-                // Atomic race resolution: if the waiter is still registered,
-                // it's a genuine timeout. If not, a concurrent answer() raced
-                // us; drain rx non-blockingly to recover the value it sent.
-                let removed = self.waiters.lock().await.remove(&prompt_id).is_some();
-                if removed {
-                    serde_json::json!({ "answer": serde_json::Value::Null, "timed_out": true })
-                } else {
-                    match rx.try_recv() {
-                        Ok(v) => v,
-                        Err(_) => {
-                            serde_json::json!({ "answer": serde_json::Value::Null, "timed_out": true })
-                        }
-                    }
-                }
-            }
+            _ => serde_json::json!({ "answer": serde_json::Value::Null, "timed_out": true }),
         }
+        // _guard drops here, removing prompt_id from waiters if still present.
     }
 
     /// Resolve a pending prompt with the operator's answer. Returns `Err(())`
@@ -97,12 +103,28 @@ impl OperatorPromptRegistry {
         prompt_id: Uuid,
         answer: serde_json::Value,
     ) -> Result<(), ()> {
-        if let Some(tx) = self.waiters.lock().await.remove(&prompt_id) {
-            let _ = tx.send(serde_json::json!({ "answer": answer, "timed_out": false }));
-            Ok(())
-        } else {
-            Err(())
+        // Take the sender out under the lock, then release the lock BEFORE
+        // calling `tx.send`. This avoids any chance of deadlock against the
+        // PromptGuard's Drop, which also locks `waiters`.
+        let entry = {
+            let mut map = self.waiters.lock().expect("waiters mutex poisoned");
+            map.remove(&prompt_id)
+        };
+        match entry {
+            Some(tx) => {
+                let _ = tx.send(serde_json::json!({ "answer": answer, "timed_out": false }));
+                Ok(())
+            }
+            None => Err(()),
         }
+    }
+
+    /// Test-visible: how many prompts are currently registered.
+    pub async fn pending_count(&self) -> usize {
+        self.waiters
+            .lock()
+            .expect("waiters mutex poisoned")
+            .len()
     }
 }
 

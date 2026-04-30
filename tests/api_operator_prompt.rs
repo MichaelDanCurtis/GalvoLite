@@ -83,6 +83,39 @@ async fn ask_operator_times_out_with_null_answer() {
 }
 
 #[tokio::test]
+async fn dropping_register_and_wait_future_clears_waiters_map() {
+    use futures_util::{pin_mut, poll};
+    use galvolite::api::events::EventBroadcaster;
+    use galvolite::api::operator::OperatorPromptRegistry;
+
+    let bus = EventBroadcaster::new(8);
+    let reg = OperatorPromptRegistry::new();
+
+    {
+        let reg2 = reg.clone();
+        let fut = async move {
+            reg2.register_and_wait(
+                &bus,
+                uuid::Uuid::new_v4(),
+                "?".into(),
+                None,
+                Some(60),
+            )
+            .await
+        };
+        pin_mut!(fut);
+        // Poll once → registers prompt_id, returns Pending on the timeout/rx await.
+        let p = poll!(fut.as_mut());
+        assert!(matches!(p, std::task::Poll::Pending));
+        assert_eq!(reg.pending_count().await, 1);
+        // Drop the future explicitly via end-of-scope.
+    }
+
+    // After drop, guard's Drop must have removed the entry.
+    assert_eq!(reg.pending_count().await, 0);
+}
+
+#[tokio::test]
 async fn answer_unknown_prompt_returns_404() {
     let setup = common::test_app();
     let proj = setup._dir.path().join("proj");
