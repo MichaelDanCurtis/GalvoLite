@@ -270,6 +270,19 @@ fn apply_column_side_effects(
                     "UPDATE sessions SET plan_markdown = ?1 WHERE id = ?2",
                     rusqlite::params![md, sid],
                 )?;
+                let parsed = crate::plan_steps::parse_plan_markdown(md);
+                crate::db::Db::delete_plan_steps_for_session_in_tx(tx, session_id)?;
+                for s in &parsed {
+                    crate::db::Db::upsert_plan_step_in_tx(
+                        tx,
+                        session_id,
+                        &s.step_hash,
+                        s.ordinal,
+                        &s.title,
+                        s.status.as_db_str(),
+                        None,
+                    )?;
+                }
             }
         }
         "mcp.set_seed" => {
@@ -335,13 +348,23 @@ pub fn apply_event_with_bus(
     let kind = input.kind.clone();
     let source_str = input.source.to_string();
     let payload = input.payload.clone();
+
+    // Sub-plan 5 Task 3: snapshot prior plan_steps for diff before write.
+    // Only `mcp.set_plan` mutates the table, so other kinds skip the read.
+    let prior_plan_steps: Option<Vec<crate::plan_steps::DbPlanStep>> =
+        if kind == "mcp.set_plan" {
+            Some(db.read_plan_steps_raw(session_id).unwrap_or_default())
+        } else {
+            None
+        };
+
     let outcome = apply_event(db, session_id, input)?;
     if !outcome.deduped {
         let ts = chrono::Utc::now().to_rfc3339();
         bus.publish(crate::api::events::DomainEvent::SessionEventAppended {
             session_id,
             event_id: outcome.event_id,
-            kind,
+            kind: kind.clone(),
             source: source_str,
             ts: ts.clone(),
             payload,
@@ -353,6 +376,41 @@ pub fn apply_event_with_bus(
                 next: outcome.next_state,
                 last_event_ts: ts,
             });
+        }
+        // Sub-plan 5 Task 3: emit `SessionPlanReplaced` and per-step
+        // `SessionPlanStepChanged` events whenever `set_plan` rewrites the
+        // plan_steps table. Diff is computed against the pre-event snapshot
+        // captured above (post-event read would always show zero changes
+        // because we delete-then-reinsert).
+        if kind == "mcp.set_plan" {
+            if let Ok(next_rows) = db.read_plan_steps_raw(session_id) {
+                let json_steps = db.read_plan_steps(session_id).unwrap_or_default();
+                bus.publish(crate::api::events::DomainEvent::SessionPlanReplaced {
+                    session_id,
+                    steps: serde_json::Value::Array(json_steps),
+                });
+                let prior = prior_plan_steps.unwrap_or_default();
+                let next_inputs: Vec<crate::plan_steps::PlanStepInput> = next_rows
+                    .into_iter()
+                    .map(|r| crate::plan_steps::PlanStepInput {
+                        step_hash: r.step_hash,
+                        title:     r.title,
+                        status:    crate::plan_steps::PlanStepStatus::from_input_str(&r.status)
+                            .unwrap_or(crate::plan_steps::PlanStepStatus::Pending),
+                        ordinal:   r.ordinal,
+                    })
+                    .collect();
+                let diff = crate::plan_steps::diff_plan_steps(&prior, &next_inputs);
+                for c in diff.changed {
+                    bus.publish(crate::api::events::DomainEvent::SessionPlanStepChanged {
+                        session_id,
+                        step_hash:   c.step_hash,
+                        prev_status: c.prev_status,
+                        next_status: c.next_status,
+                        note:        None,
+                    });
+                }
+            }
         }
     }
     Ok(outcome)

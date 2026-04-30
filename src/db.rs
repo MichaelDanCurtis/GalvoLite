@@ -788,6 +788,33 @@ impl Db {
         Ok(rows)
     }
 
+    /// Like `read_plan_steps` but returns `DbPlanStep` (DB-native status,
+    /// keyed by `step_hash`) for use by the `apply_event_with_bus` plan
+    /// diff. Order: ordinal ASC.
+    pub fn read_plan_steps_raw(
+        &self,
+        session_id: Uuid,
+    ) -> Result<Vec<crate::plan_steps::DbPlanStep>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT step_hash, ordinal, title, status
+             FROM plan_steps
+             WHERE session_id = ?1
+             ORDER BY ordinal ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![session_id.to_string()], |r| {
+                Ok(crate::plan_steps::DbPlanStep {
+                    step_hash: r.get(0)?,
+                    ordinal:   r.get(1)?,
+                    title:     r.get(2)?,
+                    status:    r.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Upsert one `plan_steps` row inside a caller-supplied transaction.
     /// Used by `state::apply_event` for `mcp.set_plan` writes. `status` MUST
     /// be DB-native (`pending` / `in_progress` / `done` / `blocked`); see

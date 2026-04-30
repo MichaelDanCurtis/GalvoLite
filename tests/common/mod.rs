@@ -43,6 +43,30 @@ pub fn test_app() -> TestApp {
     }
 }
 
+/// Like [`test_app`] but constructs the `SessionManager` with an explicit
+/// `EventBroadcaster` so tests can assert on `mgr.subscribe_events()`. Used
+/// by Sub-plan 5 plan_step / recovery tests; will be the only constructor
+/// once Task 9 lands.
+pub fn test_app_with_bus() -> TestApp {
+    let dir = TempDir::new().unwrap();
+    let data_dir = dir.path().to_path_buf();
+    let db = Db::open(data_dir.join("test.sqlite")).unwrap();
+    let bus = galvolite::api::events::EventBroadcaster::new(64);
+    let mgr = Arc::new(SessionManager::with_event_bus(
+        db.clone(),
+        data_dir,
+        bus,
+    ));
+    let router = galvolite::api::router(mgr.clone());
+    TestApp {
+        app: router.clone(),
+        router,
+        db,
+        mgr,
+        _dir: dir,
+    }
+}
+
 pub fn seed_session_with_role(db: &Db, role: &str) -> (uuid::Uuid, String) {
     let path = format!("/tmp/galvolite-test-{}", uuid::Uuid::new_v4());
     let proj = db
