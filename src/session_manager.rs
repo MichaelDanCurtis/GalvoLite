@@ -315,6 +315,207 @@ impl SessionManager {
         Ok(session)
     }
 
+    pub async fn spawn_child(
+        self: &Arc<Self>,
+        parent_id: Uuid,
+        role: &str,
+        task: &str,
+    ) -> Result<crate::db::Session> {
+        let parent = self.db.get_session(parent_id)?;
+        let project = self.db.get_project(parent.project_id)?;
+        let repo_root = std::path::PathBuf::from(&project.path);
+
+        // Resolve parent's HEAD as base ref so the child sees parent WIP commits.
+        let head_out = std::process::Command::new("git")
+            .args(["-C", parent.worktree_path.as_str(), "rev-parse", "HEAD"])
+            .output()
+            .map_err(|e| Error::io(&repo_root, e))?;
+        let base_ref = if head_out.status.success() {
+            String::from_utf8_lossy(&head_out.stdout).trim().to_string()
+        } else {
+            "HEAD".to_string()
+        };
+
+        // Provisional UUID for branch derivation; insert may produce a different one.
+        let child_id = Uuid::new_v4();
+        let (wt_path, branch) = crate::worktree::add_worktree(&repo_root, child_id, &base_ref)?;
+
+        let session = self.db.insert_session(crate::db::NewSession {
+            project_id: parent.project_id,
+            role: role.to_string(),
+            branch: Some(branch.clone()),
+            worktree_path: wt_path.to_string_lossy().into_owned(),
+            task_summary: task.to_string(),
+            parent_session_id: Some(parent_id),
+        })?;
+
+        // If insert produced a different id, rename the worktree dir to match.
+        let _wt_path = if session.id != child_id {
+            let new_wt = repo_root.join(".galvolite").join("worktrees").join(session.id.to_string());
+            std::fs::rename(&wt_path, &new_wt).map_err(|e| Error::io(&new_wt, e))?;
+            self.db.update_worktree_path(session.id, &new_wt.to_string_lossy())?;
+            new_wt
+        } else {
+            wt_path
+        };
+
+        let session = self.db.get_session(session.id)?;
+        let wt_pathbuf = std::path::PathBuf::from(&session.worktree_path);
+
+        // Per-session bootstrap (mirror spawn_session)
+        let galvolite_dir = wt_pathbuf.join(".galvolite");
+        if let Err(e) = std::fs::create_dir_all(&galvolite_dir) {
+            orphan_session(&self.db, &self.event_bus, session.id, "galvolite_dir_create_failed");
+            return Err(Error::io(&galvolite_dir, e));
+        }
+        let claude_md_path = galvolite_dir.join("CLAUDE-session.md");
+        if let Err(e) = std::fs::write(&claude_md_path, crate::claude_md::profile_for_role(role)) {
+            orphan_session(&self.db, &self.event_bus, session.id, "claude_md_write_failed");
+            return Err(Error::io(&claude_md_path, e));
+        }
+        let handoff_dir = HandoffDir::new(galvolite_dir.join("handoffs"));
+        if let Err(e) = crate::handoff::ensure_session_dir(&handoff_dir, session.id) {
+            orphan_session(&self.db, &self.event_bus, session.id, "handoff_dir_create_failed");
+            return Err(e);
+        }
+
+        match crate::spawn_config::resolve_hook_binary() {
+            Ok(hook_bin) => {
+                if let Err(e) = crate::spawn_config::write_settings_json(
+                    &wt_pathbuf,
+                    hook_bin.to_string_lossy().as_ref(),
+                ) {
+                    orphan_session(&self.db, &self.event_bus, session.id, "settings_json_write_failed");
+                    return Err(Error::io(wt_pathbuf.join(".claude/settings.json"), e));
+                }
+            }
+            Err(e) => {
+                orphan_session(&self.db, &self.event_bus, session.id, "hook_binary_resolve_failed");
+                return Err(Error::io(std::path::PathBuf::from("galvolite-hook"), e));
+            }
+        }
+
+        let api_token = format!("tok_{}", Uuid::new_v4().simple());
+        if let Err(e) = self.db.set_api_token(session.id, &api_token) {
+            orphan_session(&self.db, &self.event_bus, session.id, "api_token_persist_failed");
+            return Err(e);
+        }
+        let api_base = crate::spawn_config::resolve_api_base();
+        if let Err(e) = crate::spawn_config::write_mcp_json(&wt_pathbuf, &api_base, &api_token) {
+            orphan_session(&self.db, &self.event_bus, session.id, "mcp_json_write_failed");
+            return Err(e);
+        }
+
+        let claude_cmd = std::env::var("GALVOLITE_CLAUDE_CMD").unwrap_or_else(|_| "claude".to_string());
+        let cycle_id = self.db.start_cycle(session.id)?;
+
+        let pty = match PtyHandle::spawn(PtyOpts {
+            cwd: wt_pathbuf.clone(),
+            command: claude_cmd,
+            args: vec![],
+            env: vec![],
+        }) {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = self.db.end_cycle_if_unended(cycle_id, None);
+                orphan_session(&self.db, &self.event_bus, session.id, "pty_spawn_failed");
+                return Err(e);
+            }
+        };
+
+        if let Err(e) = self.db.update_session_pid(session.id, pty.pid as i64) {
+            drop(pty);
+            let _ = self.db.end_cycle_if_unended(cycle_id, None);
+            orphan_session(&self.db, &self.event_bus, session.id, "update_pid_failed");
+            return Err(e);
+        }
+
+        let cycle_id_slot: Arc<StdMutex<Option<Uuid>>> =
+            Arc::new(StdMutex::new(Some(cycle_id)));
+        let handle = pty.shared();
+        let scrollback = pty.scrollback.clone();
+
+        let fx = Arc::new(crate::ritual::PtySideEffects::new(handle.clone()));
+        let driver = Arc::new(crate::ritual::RitualDriver::new(fx));
+
+        // Emit parent-side spawn event (logging-only; ignore if it fails).
+        let _ = crate::state::apply_event_with_bus(
+            &self.db, parent_id, &self.event_bus,
+            crate::state::EventInput {
+                source: crate::state::Source::Mcp,
+                kind: "mcp.spawn_session".into(),
+                payload: serde_json::json!({ "child_id": session.id, "role": role, "branch": branch }),
+                dedup_key: Some(format!("spawn:{}:{}", parent_id, session.id)),
+            },
+        );
+
+        // Emit child session_started event.
+        let started = crate::state::apply_event_with_bus(
+            &self.db, session.id, &self.event_bus,
+            crate::state::EventInput {
+                source: crate::state::Source::System,
+                kind: "system.session_started".into(),
+                payload: serde_json::json!({ "role": role, "parent": parent_id }),
+                dedup_key: Some(format!("session-started:{}", session.id)),
+            },
+        );
+        if let Err(e) = started {
+            handle.kill();
+            let _ = self.db.end_cycle_if_unended(cycle_id, None);
+            orphan_session(&self.db, &self.event_bus, session.id, "session_started_event_failed");
+            return Err(e);
+        }
+
+        {
+            let mut running = self.running.lock().unwrap();
+            running.insert(
+                session.id,
+                RunningSession {
+                    driver: driver.clone(),
+                    handle: handle.clone(),
+                    scrollback,
+                    cycle_id: cycle_id_slot.clone(),
+                    handoff_dir: handoff_dir.clone(),
+                },
+            );
+        }
+
+        let mgr = Arc::clone(self);
+        let session_id = session.id;
+        let handoff_dir_bg = handoff_dir.clone();
+        let cycle_id_slot_bg = cycle_id_slot.clone();
+        tokio::spawn(async move {
+            let mut pty_owner = pty;
+            pty_owner.wait_exit().await;
+
+            let prev_cycle = cycle_id_slot_bg.lock().unwrap().take();
+            if let Some(prev) = prev_cycle {
+                let handoff_path = crate::handoff::latest_handoff_for(&handoff_dir_bg, session_id)
+                    .ok()
+                    .flatten()
+                    .map(|p| p.to_string_lossy().into_owned());
+                let _ = mgr.db.end_cycle_if_unended(prev, handoff_path.as_deref());
+            }
+            let _ = crate::state::apply_event_with_bus(
+                &mgr.db,
+                session_id,
+                &mgr.event_bus,
+                crate::state::EventInput {
+                    source: crate::state::Source::System,
+                    kind: "system.session_ended".into(),
+                    payload: serde_json::json!({ "reason": "pty_exit" }),
+                    dedup_key: Some(format!("session-ended:{session_id}")),
+                },
+            );
+            let mut running = mgr.running.lock().unwrap();
+            running.remove(&session_id);
+        });
+
+        // Re-fetch after all mutations so the returned row is fully up-to-date.
+        let session = self.db.get_session(session_id)?;
+        Ok(session)
+    }
+
     pub fn list_sessions(&self) -> Result<Vec<Session>> {
         self.db.list_sessions()
     }

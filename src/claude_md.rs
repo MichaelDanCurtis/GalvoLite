@@ -10,6 +10,13 @@ pub fn implementation_profile() -> &'static str {
     IMPL_PROFILE
 }
 
+/// Route a role name to the appropriate CLAUDE.md profile.
+/// v1: all roles use the implementation profile. Task 15 will add
+/// orchestrator/brainstorm/scout profiles.
+pub fn profile_for_role(_role: &str) -> &'static str {
+    IMPL_PROFILE
+}
+
 const IMPL_PROFILE: &str = r#"# CLAUDE.md — GalvoLite Implementation Session
 
 You are a Claude Code session managed by GalvoLite. Follow this contract:

@@ -434,6 +434,15 @@ impl Db {
         Ok(())
     }
 
+    pub fn update_worktree_path(&self, sid: Uuid, path: &str) -> Result<()> {
+        let conn = self.pool.get()?;
+        conn.execute(
+            "UPDATE sessions SET worktree_path = ?1 WHERE id = ?2",
+            rusqlite::params![path, sid.to_string()],
+        )?;
+        Ok(())
+    }
+
     /// Set the `autopilot` flag on a session row.
     /// Returns `Error::SessionNotFound` if no row was updated.
     pub fn set_session_autopilot(&self, id: uuid::Uuid, enabled: bool) -> Result<()> {
