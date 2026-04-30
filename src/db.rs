@@ -788,6 +788,80 @@ impl Db {
         Ok(rows)
     }
 
+    /// Upsert one `plan_steps` row inside a caller-supplied transaction.
+    /// Used by `state::apply_event` for `mcp.set_plan` writes. `status` MUST
+    /// be DB-native (`pending` / `in_progress` / `done` / `blocked`); see
+    /// `crate::plan_steps::PlanStepStatus::as_db_str`.
+    pub fn upsert_plan_step_in_tx(
+        tx: &rusqlite::Transaction<'_>,
+        session_id: Uuid,
+        step_hash: &str,
+        ordinal: i64,
+        title: &str,
+        status: &str,
+        note: Option<&str>,
+    ) -> Result<()> {
+        tx.execute(
+            "INSERT INTO plan_steps
+                (session_id, step_hash, ordinal, title, status, note, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+             ON CONFLICT(session_id, step_hash) DO UPDATE SET
+                ordinal    = excluded.ordinal,
+                title      = excluded.title,
+                status     = excluded.status,
+                note       = excluded.note,
+                updated_at = excluded.updated_at",
+            params![session_id.to_string(), step_hash, ordinal, title, status, note],
+        )?;
+        Ok(())
+    }
+
+    /// Drop every plan_step row for a session inside a caller-supplied
+    /// transaction. `set_plan` calls this before re-inserting so removed
+    /// steps disappear and ordinals stay dense.
+    pub fn delete_plan_steps_for_session_in_tx(
+        tx: &rusqlite::Transaction<'_>,
+        session_id: Uuid,
+    ) -> Result<()> {
+        tx.execute(
+            "DELETE FROM plan_steps WHERE session_id = ?1",
+            params![session_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Update `status` (+ optional `note`) on a single plan_step row inside
+    /// the given transaction. Returns the prior status, or `None` if the
+    /// row didn't exist (caller treats as no-op).
+    pub fn set_plan_step_status_in_tx(
+        tx: &rusqlite::Transaction<'_>,
+        session_id: Uuid,
+        step_hash: &str,
+        status: &str,
+        note: Option<&str>,
+    ) -> Result<Option<String>> {
+        use rusqlite::OptionalExtension;
+        let prev: Option<String> = tx
+            .query_row(
+                "SELECT status FROM plan_steps
+                 WHERE session_id = ?1 AND step_hash = ?2",
+                params![session_id.to_string(), step_hash],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if prev.is_none() {
+            return Ok(None);
+        }
+        tx.execute(
+            "UPDATE plan_steps
+             SET status = ?1, note = ?2,
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+             WHERE session_id = ?3 AND step_hash = ?4",
+            params![status, note, session_id.to_string(), step_hash],
+        )?;
+        Ok(prev)
+    }
+
     /// Look up sibling sessions of a given session (same project), excluding
     /// the caller. Returns lightweight rows for the MCP `list_siblings` tool.
     pub fn list_session_siblings(
