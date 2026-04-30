@@ -44,16 +44,9 @@ async fn broadcaster_serializes_to_tagged_json_frames() {
 
 #[tokio::test]
 async fn session_manager_exposes_event_broadcaster() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = galvolite::db::Db::open(dir.path().join("t.sqlite")).unwrap();
-    let bus = galvolite::api::events::EventBroadcaster::new(64);
-    let mgr = std::sync::Arc::new(galvolite::session_manager::SessionManager::with_event_bus(
-        db,
-        dir.path().to_path_buf(),
-        bus.clone(),
-    ));
-    let mut rx = mgr.subscribe_events();
-    bus.publish(galvolite::api::events::DomainEvent::OperatorToast {
+    let app = common::test_app_with_bus();
+    let mut rx = app.mgr.subscribe_events();
+    app.mgr.event_bus().publish(galvolite::api::events::DomainEvent::OperatorToast {
         session_id: uuid::Uuid::new_v4(),
         level: "info".into(),
         message: "hi".into(),
@@ -64,31 +57,26 @@ async fn session_manager_exposes_event_broadcaster() {
 
 #[tokio::test]
 async fn apply_event_publishes_state_changed_and_event_appended() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = galvolite::db::Db::open(dir.path().join("t.sqlite")).unwrap();
-    let bus = galvolite::api::events::EventBroadcaster::new(64);
-    let mgr = std::sync::Arc::new(galvolite::session_manager::SessionManager::with_event_bus(
-        db.clone(), dir.path().to_path_buf(), bus.clone(),
-    ));
+    let app = common::test_app_with_bus();
 
-    let proj = db.insert_project(galvolite::db::NewProject {
+    let proj = app.db.insert_project(galvolite::db::NewProject {
         name: "p".into(),
-        path: dir.path().to_string_lossy().into(),
+        path: app._dir.path().to_string_lossy().into(),
         remote_url: None,
     }).unwrap();
-    let s = db.insert_session(galvolite::db::NewSession {
+    let s = app.db.insert_session(galvolite::db::NewSession {
         project_id: proj.id, role: "implementation".into(),
-        branch: None, worktree_path: dir.path().to_string_lossy().into(),
+        branch: None, worktree_path: app._dir.path().to_string_lossy().into(),
         task_summary: "t".into(), parent_session_id: None,
     }).unwrap();
-    db.pool().get().unwrap().execute(
+    app.db.pool().get().unwrap().execute(
         "UPDATE sessions SET state = 'idle' WHERE id = ?1",
         rusqlite::params![s.id.to_string()],
     ).unwrap();
 
-    let mut rx = mgr.subscribe_events();
+    let mut rx = app.mgr.subscribe_events();
     galvolite::state::apply_event_with_bus(
-        &db, s.id, mgr.event_bus(),
+        &app.db, s.id, app.mgr.event_bus(),
         galvolite::state::EventInput {
             source: galvolite::state::Source::Hook,
             kind: "hook.UserPromptSubmit".into(),
@@ -109,30 +97,19 @@ async fn apply_event_publishes_state_changed_and_event_appended() {
 async fn ws_emits_domain_events_as_text_frames() {
     use tokio_tungstenite::tungstenite::Message;
     // Start the real router on an ephemeral port.
-    let dir = tempfile::tempdir().unwrap();
-    let db = galvolite::db::Db::open(dir.path().join("t.sqlite")).unwrap();
-    let bus = galvolite::api::events::EventBroadcaster::new(64);
-    let mgr = std::sync::Arc::new(galvolite::session_manager::SessionManager::with_event_bus(
-        db.clone(),
-        dir.path().to_path_buf(),
-        bus.clone(),
-    ));
-    let app = galvolite::api::router(mgr.clone());
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    let app = common::test_app_with_bus();
+    let port = common::serve_ephemeral(app.app.clone()).await;
 
     // Spawn a real session so the WS route accepts the subscribe (the
     // terminal route requires a live PTY-backed session).
-    let proj = mgr
+    let proj = app.mgr
         .add_project(galvolite::db::NewProject {
             name: "p".into(),
-            path: dir.path().to_string_lossy().into_owned(),
+            path: app._dir.path().to_string_lossy().into_owned(),
             remote_url: None,
         })
         .unwrap();
-    let session = mgr
+    let session = app.mgr
         .spawn_session(
             proj.id,
             "echo".into(),
@@ -144,12 +121,12 @@ async fn ws_emits_domain_events_as_text_frames() {
         .unwrap();
     let sid = session.id;
     let token = format!("tok_{}", uuid::Uuid::new_v4().simple());
-    db.set_api_token(sid, &token).unwrap();
+    app.db.set_api_token(sid, &token).unwrap();
 
     let url = format!("ws://127.0.0.1:{port}/api/sessions/{sid}/terminal?token={token}");
     let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
 
-    bus.publish(galvolite::api::events::DomainEvent::OperatorToast {
+    app.mgr.event_bus().publish(galvolite::api::events::DomainEvent::OperatorToast {
         session_id: sid,
         level: "info".into(),
         message: "hi".into(),
@@ -175,41 +152,30 @@ async fn ws_emits_domain_events_as_text_frames() {
 #[tokio::test]
 async fn ws_funnel_serializes_pty_and_event_writes_through_one_writer() {
     use tokio_tungstenite::tungstenite::Message;
-    let dir = tempfile::tempdir().unwrap();
-    let db = galvolite::db::Db::open(dir.path().join("t.sqlite")).unwrap();
-    let bus = galvolite::api::events::EventBroadcaster::new(64);
-    let mgr = std::sync::Arc::new(galvolite::session_manager::SessionManager::with_event_bus(
-        db.clone(),
-        dir.path().to_path_buf(),
-        bus.clone(),
-    ));
-    let app = galvolite::api::router(mgr.clone());
+    let app = common::test_app_with_bus();
+    let port = common::serve_ephemeral(app.app.clone()).await;
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
-
-    let proj = mgr
+    let proj = app.mgr
         .add_project(galvolite::db::NewProject {
             name: "p".into(),
-            path: dir.path().to_string_lossy().into_owned(),
+            path: app._dir.path().to_string_lossy().into_owned(),
             remote_url: None,
         })
         .unwrap();
-    let session = mgr
+    let session = app.mgr
         .spawn_session(proj.id, "echo".into(), "implementation".into(), "cat".into(), vec![])
         .await
         .unwrap();
     let sid = session.id;
     let token = format!("tok_{}", uuid::Uuid::new_v4().simple());
-    db.set_api_token(sid, &token).unwrap();
+    app.db.set_api_token(sid, &token).unwrap();
 
     let url = format!("ws://127.0.0.1:{port}/api/sessions/{sid}/terminal?token={token}");
     let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
 
     // Publish 10 events in fast succession.
     for i in 0..10 {
-        bus.publish(galvolite::api::events::DomainEvent::OperatorToast {
+        app.mgr.event_bus().publish(galvolite::api::events::DomainEvent::OperatorToast {
             session_id: sid,
             level: "info".into(),
             message: format!("msg-{i}"),

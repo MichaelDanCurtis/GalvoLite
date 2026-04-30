@@ -67,6 +67,18 @@ pub fn test_app_with_bus() -> TestApp {
     }
 }
 
+/// Bind an ephemeral 127.0.0.1 listener for tests that need a real HTTP/WS
+/// surface; spawn the server and return the bound port. Mirrors what each
+/// WS test was hand-rolling before.
+pub async fn serve_ephemeral(app: axum::Router) -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    port
+}
+
 pub fn seed_session_with_role(db: &Db, role: &str) -> (uuid::Uuid, String) {
     let path = format!("/tmp/galvolite-test-{}", uuid::Uuid::new_v4());
     let proj = db

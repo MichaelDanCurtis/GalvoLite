@@ -60,41 +60,27 @@ fn inner_text(r: &Value) -> Value {
 #[tokio::test]
 async fn dashboard_event_stream_ask_operator_lifecycle() {
     // -----------------------------------------------------------------------
-    // 1. Boot: DB + EventBroadcaster + SessionManager with_event_bus.
+    // 1. Boot: shared test helper (DB + EventBroadcaster + SessionManager).
     // -----------------------------------------------------------------------
-    let dir = tempfile::tempdir().unwrap();
-    let db = galvolite::db::Db::open(dir.path().join("t.sqlite")).unwrap();
-    let bus = galvolite::api::events::EventBroadcaster::new(128);
-    let mgr = std::sync::Arc::new(
-        galvolite::session_manager::SessionManager::with_event_bus(
-            db.clone(),
-            dir.path().to_path_buf(),
-            bus.clone(),
-        ),
-    );
-    let app = galvolite::api::router(mgr.clone());
+    let app = common::test_app_with_bus();
 
     // -----------------------------------------------------------------------
     // 2. Bind ephemeral port and serve.
     // -----------------------------------------------------------------------
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
+    let port = common::serve_ephemeral(app.app.clone()).await;
     let base_url = format!("http://127.0.0.1:{port}");
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
 
     // -----------------------------------------------------------------------
     // 3. Seed: project + live PTY session (cat = mock PTY command).
     // -----------------------------------------------------------------------
-    let proj = mgr
+    let proj = app.mgr
         .add_project(galvolite::db::NewProject {
             name: "smoke".into(),
-            path: dir.path().to_string_lossy().into_owned(),
+            path: app._dir.path().to_string_lossy().into_owned(),
             remote_url: None,
         })
         .unwrap();
-    let session = mgr
+    let session = app.mgr
         .spawn_session(
             proj.id,
             "echo".into(),
@@ -106,7 +92,7 @@ async fn dashboard_event_stream_ask_operator_lifecycle() {
         .unwrap();
     let sid = session.id;
     let token = format!("tok_{}", uuid::Uuid::new_v4().simple());
-    db.set_api_token(sid, &token).unwrap();
+    app.db.set_api_token(sid, &token).unwrap();
 
     // -----------------------------------------------------------------------
     // 4. Open WebSocket to the terminal endpoint.
