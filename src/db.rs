@@ -404,14 +404,18 @@ impl Db {
         Ok(rows)
     }
 
-    /// Mark all non-terminal sessions (`ended_at IS NULL`) as `Error`.
-    /// Called on startup to reconcile rows left in `Working`/`Spawning`/
-    /// `AttentionNeeded`/etc. by an abrupt server exit. Returns the number
-    /// of rows updated.
+    /// Mark non-terminal sessions that never reached "PTY alive" (i.e.
+    /// `pty_pid IS NULL`) as `Error` on startup. Sessions that did record a
+    /// `pty_pid` are left untouched here — startup recovery
+    /// (`recover_non_terminal_sessions`, spec §11.2) inspects each
+    /// recorded pid and decides per-session: alive → preserve + emit
+    /// `system.recovered`; dead → orphan with auto-handoff (Task 11).
+    /// Returns the number of rows updated.
     pub fn reconcile_orphaned_sessions(&self) -> Result<usize> {
         let conn = self.pool.get()?;
         let rows = conn.execute(
-            "UPDATE sessions SET state = ?1, ended_at = ?2 WHERE ended_at IS NULL",
+            "UPDATE sessions SET state = ?1, ended_at = ?2
+             WHERE ended_at IS NULL AND pty_pid IS NULL",
             params![SessionState::Error.to_string(), Utc::now().to_rfc3339()],
         )?;
         Ok(rows)
@@ -745,6 +749,24 @@ impl Db {
                     "prev_state": r.get::<_, Option<String>>(5)?,
                     "next_state": r.get::<_, Option<String>>(6)?,
                 }))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Return `(session_id, pty_pid)` for every session in a non-terminal state
+    /// (`starting | idle | working | awaiting_input | needs_attention`).
+    /// Used by startup recovery (spec §11.2). Sessions without a recorded
+    /// `pty_pid` are returned with `0`, which `pid_is_alive` treats as dead.
+    pub fn list_non_terminal_sessions(&self) -> Result<Vec<(Uuid, i64)>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, COALESCE(pty_pid, 0) FROM sessions
+             WHERE state IN ('starting','idle','working','awaiting_input','needs_attention')",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((parse_uuid(&r.get::<_, String>(0)?)?, r.get::<_, i64>(1)?))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)

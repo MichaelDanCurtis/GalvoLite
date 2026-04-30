@@ -108,4 +108,5 @@ export type DomainEvent =
   | { type: "session.plan_replaced"; session_id: string; steps: PlanStep[] }
   | { type: "session.plan_step_changed"; session_id: string; step_hash: string; prev_status: PlanStepStatus; next_status: PlanStepStatus; note: string | null }
   | { type: "operator.prompt"; prompt_id: string; session_id: string; question: string; choices: string[] | null; timeout_secs: number | null }
-  | { type: "operator.toast"; session_id: string; level: "info" | "warn" | "urgent"; message: string };
+  | { type: "operator.toast"; session_id: string; level: "info" | "warn" | "urgent"; message: string }
+  | { type: "session.resumed"; session_id: string; last_events: EventRow[] };

@@ -67,6 +67,9 @@ impl SessionManager {
             Ok(n) => tracing::info!("reconciled {n} orphaned session(s) to Error on startup"),
             Err(e) => tracing::warn!("startup session reconciliation failed: {e}"),
         }
+        if let Err(e) = recover_non_terminal_sessions(&db, &event_bus) {
+            tracing::warn!("startup recovery failed: {e}");
+        }
         Self {
             db,
             data_dir,
@@ -610,6 +613,61 @@ fn orphan_session(
             dedup_key: Some(format!("session-orphaned:{session_id}")),
         },
     );
+}
+
+/// Restart-recovery scan (spec §11.2). For every session in a non-terminal
+/// state, check whether the recorded PTY pid is still alive. Alive: replay
+/// the last 20 events as one `SessionResumed` frame and append a
+/// `system.recovered` marker so consumers can see where the restart
+/// boundary lies. Dead: handled by Task 11 (orphan + auto-handoff).
+///
+/// Errors from individual sessions are swallowed — recovery is best-effort
+/// and one bad session must not block the others.
+fn recover_non_terminal_sessions(db: &Db, bus: &EventBroadcaster) -> Result<()> {
+    let rows = db.list_non_terminal_sessions()?;
+    for (sid, pid) in rows {
+        let alive = pid_is_alive(pid);
+        if alive {
+            // Alive PTY: replay last 20 events as one SessionResumed frame
+            // (we cannot rebind the read loop — that requires the original
+            // master fd). Mark a recovery boundary in the events log.
+            let recent = db.read_recent_events(sid, 20).unwrap_or_default();
+            bus.publish(DomainEvent::SessionResumed {
+                session_id: sid,
+                last_events: serde_json::Value::Array(recent),
+            });
+            let _ = crate::state::apply_event_with_bus(
+                db,
+                sid,
+                bus,
+                crate::state::EventInput {
+                    source: crate::state::Source::System,
+                    kind: "system.recovered".into(),
+                    payload: serde_json::json!({ "pid": pid, "alive": true }),
+                    dedup_key: Some(format!(
+                        "recovered:{sid}:{}",
+                        chrono::Utc::now().timestamp()
+                    )),
+                },
+            );
+        } else {
+            // Dead PTY path is Task 11.
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn pid_is_alive(pid: i64) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    // SIGNAL 0: reachability check, no-op delivery.
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+#[cfg(not(unix))]
+fn pid_is_alive(_pid: i64) -> bool {
+    false
 }
 
 /// Validate and canonicalize a project path.

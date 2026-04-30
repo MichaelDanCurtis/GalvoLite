@@ -60,6 +60,8 @@ pub enum DomainEvent {
     },
     #[serde(rename = "operator.toast")]
     OperatorToast { session_id: Uuid, level: String, message: String },
+    #[serde(rename = "session.resumed")]
+    SessionResumed { session_id: Uuid, last_events: serde_json::Value },
 }
 
 #[derive(Clone)]
@@ -99,7 +101,8 @@ impl DomainEvent {
             | DomainEvent::SessionPlanReplaced { session_id, .. }
             | DomainEvent::SessionPlanStepChanged { session_id, .. }
             | DomainEvent::OperatorPrompt { session_id, .. }
-            | DomainEvent::OperatorToast { session_id, .. } => *session_id == sid,
+            | DomainEvent::OperatorToast { session_id, .. }
+            | DomainEvent::SessionResumed { session_id, .. } => *session_id == sid,
         }
     }
 }
