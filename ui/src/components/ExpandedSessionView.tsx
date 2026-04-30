@@ -138,7 +138,7 @@ export function ExpandedSessionView({
         next[idx] = {
           ...prev[idx],
           status: e.next_status,
-          note: e.note ?? undefined,
+          note: e.note ?? prev[idx].note,
         };
         return next;
       });
