@@ -129,6 +129,32 @@ fn event_row_records_prev_and_next_state() {
 }
 
 #[test]
+fn unknown_kind_leaves_state_unchanged() {
+    // The `_ => current` fall-through arm in `state::transition` covers
+    // logging-only kinds (hook.PostToolUse / hook.Notification / mcp.* and
+    // operator.* that don't transition). Drive a session into Working, fire
+    // one such kind, and assert the session row's state is untouched.
+    let (db, _t, sid) = open_db_with_session();
+    apply_event(&db, sid, ev("system.session_started")).unwrap();
+    apply_event(&db, sid, ev("hook.UserPromptSubmit")).unwrap();
+
+    let out = apply_event(&db, sid, ev("hook.PostToolUse")).unwrap();
+    assert_eq!(out.prev_state, Some(SessionState::Working));
+    assert_eq!(out.next_state, SessionState::Working);
+    assert!(!out.deduped);
+
+    let conn = db.pool().get().unwrap();
+    let state: String = conn
+        .query_row(
+            "SELECT state FROM sessions WHERE id = ?1",
+            [sid.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "working", "unknown kind must not change state");
+}
+
+#[test]
 fn terminal_state_rejects_further_transitions() {
     let (db, _t, sid) = open_db_with_session();
     apply_event(&db, sid, ev("system.session_ended")).unwrap();
