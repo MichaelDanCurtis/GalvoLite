@@ -171,3 +171,70 @@ async fn ws_emits_domain_events_as_text_frames() {
     .await;
     assert!(got.is_ok(), "did not receive operator.toast text frame in time");
 }
+
+#[tokio::test]
+async fn ws_funnel_serializes_pty_and_event_writes_through_one_writer() {
+    use tokio_tungstenite::tungstenite::Message;
+    let dir = tempfile::tempdir().unwrap();
+    let db = galvolite::db::Db::open(dir.path().join("t.sqlite")).unwrap();
+    let bus = galvolite::api::events::EventBroadcaster::new(64);
+    let mgr = std::sync::Arc::new(galvolite::session_manager::SessionManager::with_event_bus(
+        db.clone(),
+        dir.path().to_path_buf(),
+        bus.clone(),
+    ));
+    let app = galvolite::api::router(mgr.clone());
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+
+    let proj = mgr
+        .add_project(galvolite::db::NewProject {
+            name: "p".into(),
+            path: dir.path().to_string_lossy().into_owned(),
+            remote_url: None,
+        })
+        .unwrap();
+    let session = mgr
+        .spawn_session(proj.id, "echo".into(), "implementation".into(), "cat".into(), vec![])
+        .await
+        .unwrap();
+    let sid = session.id;
+    let token = format!("tok_{}", uuid::Uuid::new_v4().simple());
+    db.set_api_token(sid, &token).unwrap();
+
+    let url = format!("ws://127.0.0.1:{port}/api/sessions/{sid}/terminal?token={token}");
+    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+
+    // Publish 10 events in fast succession.
+    for i in 0..10 {
+        bus.publish(galvolite::api::events::DomainEvent::OperatorToast {
+            session_id: sid,
+            level: "info".into(),
+            message: format!("msg-{i}"),
+        });
+    }
+
+    // Drain text frames until we see all 10 in order.
+    let got = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut seen: Vec<String> = Vec::new();
+        while seen.len() < 10 {
+            match ws.next().await.unwrap().unwrap() {
+                Message::Text(t) => {
+                    let v: serde_json::Value = serde_json::from_str(&t).unwrap();
+                    if v["type"] == "operator.toast" {
+                        seen.push(v["message"].as_str().unwrap().to_string());
+                    }
+                }
+                _ => continue, // skip binary PTY frames
+            }
+        }
+        seen
+    })
+    .await
+    .expect("did not receive all 10 toast frames in time");
+
+    let expected: Vec<String> = (0..10).map(|i| format!("msg-{i}")).collect();
+    assert_eq!(got, expected, "frames lost or reordered through funnel");
+}

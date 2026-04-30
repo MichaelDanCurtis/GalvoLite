@@ -330,20 +330,29 @@ async fn handle_terminal_ws(
     use axum::extract::ws::Message;
     use futures_util::{sink::SinkExt, stream::StreamExt};
 
-    let (sink, mut stream) = socket.split();
-    // The sink is shared between the PTY-bytes writer task and the
-    // domain-event forwarder task: both can emit frames asynchronously,
-    // so the writer half lives behind an Arc<Mutex<_>>. Each send takes
-    // the lock briefly; contention is negligible because both producers
-    // are bursty.
+    let (mut sink, mut stream) = socket.split();
+    // Funnel architecture: every WS frame write flows through a single
+    // bounded `mpsc<Message>` consumed by `writer_task`. Producers
+    // (`pty_pump` and `event_forwarder`) only push into the channel; they
+    // never touch the sink directly. This eliminates the Arc<Mutex<sink>>
+    // contention where holding the lock across `send().await` would
+    // serialize producers and risk broadcast lag (slow client blocks the
+    // event_rx, which can drop events with `RecvError::Lagged`).
     //
-    // TODO(plan-4 follow-up): Sink mutex is held across send().await in both
-    // the writer and event_forwarder branches. Under client backpressure this
-    // serializes both producers and risks broadcast lag. Consider moving to a
-    // single writer task draining an mpsc<Message> funnel.
-    let sink = std::sync::Arc::new(tokio::sync::Mutex::new(sink));
+    // Four tasks total: writer_task (consumer) + pty_pump + reader +
+    // event_forwarder. The first to finish cancels the rest via
+    // `tokio::select!`.
+    let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel::<Message>(256);
 
-    // Side channel: reader → writer, used to deliver fresh server-side
+    let writer_task = async move {
+        while let Some(msg) = frame_rx.recv().await {
+            if sink.send(msg).await.is_err() {
+                break;
+            }
+        }
+    };
+
+    // Side channel: reader → pty_pump, used to deliver fresh server-side
     // screen snapshots taken AFTER each client-driven resize. We do NOT
     // send a snapshot at WS open: the parser is sized to whatever the
     // PREVIOUS client (or initial PTY spawn) reported, while the new
@@ -356,23 +365,21 @@ async fn handle_terminal_ws(
     // so the client always lands on a coherent repaint.
     let (snap_tx, mut snap_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
 
-    let sink_for_writer = sink.clone();
-    let writer = async move {
+    let pty_tx = frame_tx.clone();
+    let pty_pump = async move {
         loop {
             tokio::select! {
                 biased;
                 snap = snap_rx.recv() => {
                     let Some(bytes) = snap else { break };
-                    let mut s = sink_for_writer.lock().await;
-                    if s.send(Message::Binary(bytes)).await.is_err() {
+                    if pty_tx.send(Message::Binary(bytes)).await.is_err() {
                         break;
                     }
                 }
                 msg = rx.recv() => {
                     match msg {
                         Ok(bytes) => {
-                            let mut s = sink_for_writer.lock().await;
-                            if s.send(Message::Binary(bytes)).await.is_err() {
+                            if pty_tx.send(Message::Binary(bytes)).await.is_err() {
                                 break;
                             }
                         }
@@ -414,10 +421,10 @@ async fn handle_terminal_ws(
 
     // Domain-event forwarder: subscribe to the per-process event bus,
     // filter to events scoped to this session, serialize each as JSON,
-    // and emit on the shared sink as a `Message::Text` frame. PTY bytes
-    // (binary) and domain events (text) thus share one socket.
+    // and push onto the funnel as a `Message::Text` frame. PTY bytes
+    // (binary) and domain events (text) thus share one writer task.
     let mut event_rx = mgr.subscribe_events();
-    let sink_for_events = sink.clone();
+    let evt_tx = frame_tx.clone();
     let event_forwarder = async move {
         loop {
             match event_rx.recv().await {
@@ -432,8 +439,7 @@ async fn handle_terminal_ws(
                             continue;
                         }
                     };
-                    let mut s = sink_for_events.lock().await;
-                    if s.send(Message::Text(json)).await.is_err() {
+                    if evt_tx.send(Message::Text(json)).await.is_err() {
                         break;
                     }
                 }
@@ -443,12 +449,20 @@ async fn handle_terminal_ws(
         }
     };
 
-    // When any of the three tasks ends (writer drained, reader observed
-    // close, or event channel dropped), the others are dropped as well —
-    // `tokio::select!` cancels the losing futures, releasing the sink
-    // and the broadcast receivers. No background task leaks per WS.
+    // Drop the original sender so writer_task's recv() completes once all
+    // producer clones drop. (Both `pty_tx` and `evt_tx` are clones; the
+    // outer `frame_tx` must be dropped explicitly so it doesn't keep
+    // frame_rx open after the producers exit.)
+    drop(frame_tx);
+
+    // When any of the four tasks ends (writer sink errored, pty_pump
+    // drained, reader observed close, or event channel dropped), the
+    // others are dropped as well — `tokio::select!` cancels the losing
+    // futures, releasing the sink and the broadcast receivers. No
+    // background task leaks per WS.
     tokio::select! {
-        _ = writer => {},
+        _ = writer_task => {},
+        _ = pty_pump => {},
         _ = reader => {},
         _ = event_forwarder => {},
     }
