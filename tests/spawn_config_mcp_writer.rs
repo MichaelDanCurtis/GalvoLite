@@ -6,13 +6,7 @@ use tempfile::TempDir;
 fn writes_mcp_json_with_http_transport_and_bearer() {
     let tmp = TempDir::new().unwrap();
     let worktree = tmp.path();
-    spawn_config::write_session_files(
-        worktree,
-        "/usr/local/bin/galvolite-hook",
-        "http://127.0.0.1:3001",
-        "test-token-abc",
-    )
-    .unwrap();
+    spawn_config::write_mcp_json(worktree, "http://127.0.0.1:3001", "test-token-abc").unwrap();
 
     let mcp_path = worktree.join(".mcp.json");
     assert!(mcp_path.exists(), ".mcp.json was not written");
@@ -34,13 +28,7 @@ fn writes_mcp_json_with_http_transport_and_bearer() {
 #[test]
 fn mcp_json_omits_portfolio_entry_when_no_gateway() {
     let tmp = TempDir::new().unwrap();
-    spawn_config::write_session_files(
-        tmp.path(),
-        "/usr/local/bin/galvolite-hook",
-        "http://127.0.0.1:3001",
-        "tok",
-    )
-    .unwrap();
+    spawn_config::write_mcp_json(tmp.path(), "http://127.0.0.1:3001", "tok").unwrap();
 
     let body: Value =
         serde_json::from_str(&std::fs::read_to_string(tmp.path().join(".mcp.json")).unwrap())
@@ -55,8 +43,8 @@ fn mcp_json_omits_portfolio_entry_when_no_gateway() {
 #[test]
 fn rewriting_overwrites_old_mcp_json() {
     let tmp = TempDir::new().unwrap();
-    spawn_config::write_session_files(tmp.path(), "/x/hook", "http://a/", "tok-1").unwrap();
-    spawn_config::write_session_files(tmp.path(), "/x/hook", "http://b/", "tok-2").unwrap();
+    spawn_config::write_mcp_json(tmp.path(), "http://a/", "tok-1").unwrap();
+    spawn_config::write_mcp_json(tmp.path(), "http://b/", "tok-2").unwrap();
 
     let body: Value =
         serde_json::from_str(&std::fs::read_to_string(tmp.path().join(".mcp.json")).unwrap())

@@ -131,17 +131,3 @@ pub fn write_mcp_json(worktree: &Path, api_base: &str, token: &str) -> Result<()
     Ok(())
 }
 
-/// Write both per-session config files. Used by callers that have a resolved
-/// hook binary, api base, and bearer token in hand. Equivalent to calling
-/// `write_settings_json` followed by `write_mcp_json`.
-pub fn write_session_files(
-    worktree: &Path,
-    hook_bin: &str,
-    api_base: &str,
-    token: &str,
-) -> Result<()> {
-    write_settings_json(worktree, hook_bin)
-        .map_err(|e| Error::io(worktree.join(".claude/settings.json"), e))?;
-    write_mcp_json(worktree, api_base, token)?;
-    Ok(())
-}
