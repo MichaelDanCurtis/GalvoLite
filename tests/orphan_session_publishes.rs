@@ -31,7 +31,10 @@ async fn orphan_session_publishes_session_orphaned_event() {
             vec![],
         )
         .await;
-    assert!(res.is_err(), "spawn_session should fail when claude bin missing");
+    assert!(
+        res.is_err(),
+        "spawn_session should fail when claude bin missing"
+    );
 
     // Drain the bus for up to 1s looking for system.session_orphaned.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
