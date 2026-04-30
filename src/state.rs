@@ -285,6 +285,22 @@ fn apply_column_side_effects(
                 }
             }
         }
+        "mcp.plan_check_step" => {
+            // Resolve target by step_hash (preferred) or by hashing title.
+            let hash: Option<String> = input.payload
+                .get("step_hash").and_then(|v| v.as_str()).map(str::to_string)
+                .or_else(|| input.payload.get("title").and_then(|v| v.as_str())
+                    .map(crate::plan_steps::step_hash_for));
+            let Some(hash) = hash else { return Ok(()); };
+            let status_in = input.payload.get("status").and_then(|v| v.as_str()).unwrap_or("pending");
+            let status = crate::plan_steps::PlanStepStatus::from_input_str(status_in)
+                .map(|s| s.as_db_str().to_string())
+                .unwrap_or_else(|| "pending".to_string());
+            let note = input.payload.get("note").and_then(|v| v.as_str());
+            let _ = crate::db::Db::set_plan_step_status_in_tx(
+                tx, session_id, &hash, &status, note,
+            )?;
+        }
         "mcp.set_seed" => {
             if let Some(md) = input.payload.get("markdown").and_then(|v| v.as_str()) {
                 tx.execute(
@@ -360,6 +376,37 @@ pub fn apply_event_with_bus(
             None
         };
 
+    // Sub-plan 5 Task 4: snapshot prior status of the targeted plan_step row
+    // for `mcp.plan_check_step`. Resolved by step_hash (preferred) or by
+    // hashing the title. Missing rows are a normal no-op (the corresponding
+    // test asserts so); a real DB error is logged but does not block the
+    // event from committing.
+    let prior_step_status: Option<(String, String)> = if kind == "mcp.plan_check_step" {
+        let hash = input
+            .payload
+            .get("step_hash")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .or_else(|| {
+                input
+                    .payload
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .map(crate::plan_steps::step_hash_for)
+            });
+        hash.and_then(|h| match db.read_plan_step_status(session_id, &h) {
+            Ok(opt) => opt.map(|s| (h, s)),
+            Err(e) => {
+                tracing::warn!(
+                    "plan_check_step prior-status read failed for {session_id}/{h}: {e}"
+                );
+                None
+            }
+        })
+    } else {
+        None
+    };
+
     let outcome = apply_event(db, session_id, input)?;
     if !outcome.deduped {
         let ts = chrono::Utc::now().to_rfc3339();
@@ -369,7 +416,7 @@ pub fn apply_event_with_bus(
             kind: kind.clone(),
             source: source_str,
             ts: ts.clone(),
-            payload,
+            payload: payload.clone(),
         });
         if Some(outcome.next_state) != outcome.prev_state {
             bus.publish(crate::api::events::DomainEvent::SessionStateChanged {
@@ -430,6 +477,27 @@ pub fn apply_event_with_bus(
                     tracing::warn!(
                         "set_plan publish skipped: read_plan_steps_raw failed for {session_id}: {e}"
                     );
+                }
+            }
+        }
+        // Sub-plan 5 Task 4: emit `SessionPlanStepChanged` when a single-step
+        // status update actually changed the row's status. Skip when the row
+        // didn't exist before (`prior_step_status == None`) or the status is
+        // unchanged.
+        if kind == "mcp.plan_check_step" {
+            let new_status_in = payload.get("status").and_then(|v| v.as_str()).unwrap_or("pending");
+            let new_status = crate::plan_steps::PlanStepStatus::from_input_str(new_status_in)
+                .map(|s| s.as_db_str().to_string())
+                .unwrap_or_else(|| "pending".into());
+            if let Some((hash, prev)) = prior_step_status {
+                if prev != new_status {
+                    bus.publish(crate::api::events::DomainEvent::SessionPlanStepChanged {
+                        session_id,
+                        step_hash:   hash,
+                        prev_status: prev,
+                        next_status: new_status,
+                        note:        payload.get("note").and_then(|v| v.as_str()).map(str::to_string),
+                    });
                 }
             }
         }

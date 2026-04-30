@@ -815,6 +815,24 @@ impl Db {
         Ok(rows)
     }
 
+    /// Read the current status of a single plan_step row, or None if
+    /// the row doesn't exist. DB-native status (`in_progress`, not `working`).
+    pub fn read_plan_step_status(
+        &self,
+        session_id: Uuid,
+        step_hash: &str,
+    ) -> Result<Option<String>> {
+        use rusqlite::OptionalExtension;
+        let conn = self.pool.get()?;
+        Ok(conn
+            .query_row(
+                "SELECT status FROM plan_steps WHERE session_id = ?1 AND step_hash = ?2",
+                params![session_id.to_string(), step_hash],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
     /// Upsert one `plan_steps` row inside a caller-supplied transaction.
     /// Used by `state::apply_event` for `mcp.set_plan` writes. `status` MUST
     /// be DB-native (`pending` / `in_progress` / `done` / `blocked`); see
