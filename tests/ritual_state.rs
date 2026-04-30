@@ -14,7 +14,7 @@ fn request_handoff_transitions_idle_to_awaiting_ready() {
 }
 
 #[test]
-fn clear_sent_transitions_clearing_to_restoring() {
+fn clear_sent_outside_clearing_is_noop() {
     let mut m = RitualMachine::new();
     // Force Clearing via direct manipulation of public API: drive
     // handoff into AwaitingHandoffReady, then nothing pushes to Clearing
@@ -35,7 +35,7 @@ fn abort_transitions_to_error() {
 }
 
 #[test]
-fn attention_resolved_returns_attention_to_working() {
+fn attention_resolved_outside_attention_is_noop() {
     let mut m = RitualMachine::new();
     // Manually wire Attention via Abort + nothing (no Signal arms),
     // so this asserts the AttentionResolved arm's no-op behavior on Idle.
