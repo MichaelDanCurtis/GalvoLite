@@ -134,17 +134,17 @@ impl SessionManager {
             // Filesystem setup failed before start_cycle — only the session
             // row exists. Route through apply_event so events log records
             // why this session ended in Error.
-            orphan_session(&self.db, session.id, "galvolite_dir_create_failed");
+            orphan_session(&self.db, &self.event_bus, session.id, "galvolite_dir_create_failed");
             return Err(Error::io(&galvolite_dir, e));
         }
         let claude_md_path = galvolite_dir.join("CLAUDE-session.md");
         if let Err(e) = std::fs::write(&claude_md_path, implementation_profile()) {
-            orphan_session(&self.db, session.id, "claude_md_write_failed");
+            orphan_session(&self.db, &self.event_bus, session.id, "claude_md_write_failed");
             return Err(Error::io(&claude_md_path, e));
         }
         let handoff_dir = HandoffDir::new(galvolite_dir.join("handoffs"));
         if let Err(e) = crate::handoff::ensure_session_dir(&handoff_dir, session.id) {
-            orphan_session(&self.db, session.id, "handoff_dir_create_failed");
+            orphan_session(&self.db, &self.event_bus, session.id, "handoff_dir_create_failed");
             return Err(e);
         }
 
@@ -158,12 +158,12 @@ impl SessionManager {
                     &worktree,
                     hook_bin.to_string_lossy().as_ref(),
                 ) {
-                    orphan_session(&self.db, session.id, "settings_json_write_failed");
+                    orphan_session(&self.db, &self.event_bus, session.id, "settings_json_write_failed");
                     return Err(Error::io(worktree.join(".claude/settings.json"), e));
                 }
             }
             Err(e) => {
-                orphan_session(&self.db, session.id, "hook_binary_resolve_failed");
+                orphan_session(&self.db, &self.event_bus, session.id, "hook_binary_resolve_failed");
                 return Err(Error::io(PathBuf::from("galvolite-hook"), e));
             }
         }
@@ -174,12 +174,12 @@ impl SessionManager {
         // pattern used in tests/dashboard_smoke_e2e.rs.
         let api_token = format!("tok_{}", Uuid::new_v4().simple());
         if let Err(e) = self.db.set_api_token(session.id, &api_token) {
-            orphan_session(&self.db, session.id, "api_token_persist_failed");
+            orphan_session(&self.db, &self.event_bus, session.id, "api_token_persist_failed");
             return Err(e);
         }
         let api_base = crate::spawn_config::resolve_api_base();
         if let Err(e) = crate::spawn_config::write_mcp_json(&worktree, &api_base, &api_token) {
-            orphan_session(&self.db, session.id, "mcp_json_write_failed");
+            orphan_session(&self.db, &self.event_bus, session.id, "mcp_json_write_failed");
             return Err(e);
         }
 
@@ -196,7 +196,7 @@ impl SessionManager {
             Ok(p) => p,
             Err(e) => {
                 let _ = self.db.end_cycle_if_unended(cycle_id, None);
-                orphan_session(&self.db, session.id, "pty_spawn_failed");
+                orphan_session(&self.db, &self.event_bus, session.id, "pty_spawn_failed");
                 return Err(e);
             }
         };
@@ -206,7 +206,7 @@ impl SessionManager {
         if let Err(e) = self.db.update_session_pid(session.id, pty.pid as i64) {
             drop(pty);
             let _ = self.db.end_cycle_if_unended(cycle_id, None);
-            orphan_session(&self.db, session.id, "update_pid_failed");
+            orphan_session(&self.db, &self.event_bus, session.id, "update_pid_failed");
             return Err(e);
         }
 
@@ -231,7 +231,7 @@ impl SessionManager {
         if let Err(e) = started {
             handle.kill();
             let _ = self.db.end_cycle_if_unended(cycle_id, None);
-            orphan_session(&self.db, session.id, "session_started_event_failed");
+            orphan_session(&self.db, &self.event_bus, session.id, "session_started_event_failed");
             return Err(e);
         }
 
@@ -336,7 +336,7 @@ impl SessionManager {
             // system.session_ended will be a no-op once we land Error
             // (terminal-state guard). The bg task still removes the
             // running-map entry.
-            orphan_session(&self.db, session.id, "prompt_inject_failed");
+            orphan_session(&self.db, &self.event_bus, session.id, "prompt_inject_failed");
             return Err(e);
         }
 
@@ -593,10 +593,16 @@ impl SessionManager {
 ///
 /// All errors are swallowed; the caller is already returning the original
 /// failure and we don't want to mask it with a database error.
-fn orphan_session(db: &Db, session_id: Uuid, reason: &'static str) {
-    let _ = crate::state::apply_event(
+fn orphan_session(
+    db: &Db,
+    bus: &crate::api::events::EventBroadcaster,
+    session_id: Uuid,
+    reason: &'static str,
+) {
+    let _ = crate::state::apply_event_with_bus(
         db,
         session_id,
+        bus,
         crate::state::EventInput {
             source: crate::state::Source::System,
             kind: "system.session_orphaned".into(),
@@ -604,11 +610,6 @@ fn orphan_session(db: &Db, session_id: Uuid, reason: &'static str) {
             dedup_key: Some(format!("session-orphaned:{session_id}")),
         },
     );
-    // Note: orphan_session is called from spawn_session error paths where we
-    // don't have a reference to the event_bus; the apply_event call above
-    // handles DB state. The bus publish is intentionally omitted here — the
-    // SessionManager callers that have bus access use apply_event_with_bus
-    // directly. This helper is kept as bare apply_event per Task 3 design.
 }
 
 /// Validate and canonicalize a project path.
