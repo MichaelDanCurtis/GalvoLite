@@ -20,7 +20,7 @@ fn delete_project_cascade_removes_project_sessions() {
         })
         .unwrap();
 
-    let _session = db
+    let session = db
         .insert_session(NewSession {
             project_id: project.id,
             role: "implementation".into(),
@@ -30,11 +30,38 @@ fn delete_project_cascade_removes_project_sessions() {
             task_summary: "test".into(),
         })
         .unwrap();
+    let sid = session.id;
+
+    // Seed a signals row so the cascade's `DELETE FROM signals` arm actually
+    // has something to remove. `record_signal` was deleted with the legacy
+    // stdout pipeline, so we go via raw SQL on the pooled connection.
+    {
+        let conn = db.pool().get().unwrap();
+        conn.execute(
+            "INSERT INTO signals (session_id, kind, at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![
+                sid.to_string(),
+                "signal.STATUS:WORKING",
+                chrono::Utc::now().to_rfc3339(),
+            ],
+        )
+        .unwrap();
+    }
 
     db.delete_project_cascade(project.id).unwrap();
 
     assert!(db.get_project(project.id).is_err(), "project should be gone");
     assert_eq!(db.list_sessions().unwrap().len(), 0, "sessions purged");
+
+    let conn = db.pool().get().unwrap();
+    let signals_left: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM signals WHERE session_id = ?1",
+            rusqlite::params![sid.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(signals_left, 0, "signals cascade did not delete row");
 }
 
 #[test]
