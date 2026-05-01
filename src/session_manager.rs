@@ -794,29 +794,41 @@ impl SessionManager {
     /// - `system.session_ended` with any other reason → terminal status "ended"
     ///
     /// Errors from `on_child_terminal` are swallowed (best-effort fan-out).
+    ///
+    /// Must be called from within a tokio runtime context.
     pub fn start_terminal_reactor(self: &Arc<Self>) {
         let mgr = Arc::clone(self);
         let mut rx = self.event_bus.subscribe();
         tokio::spawn(async move {
-            while let Ok(ev) = rx.recv().await {
-                if let DomainEvent::SessionEventAppended {
-                    session_id, kind, payload, ..
-                } = ev {
-                    match kind.as_str() {
-                        "mcp.status_report" => {
-                            if let Some(k) = payload.get("kind").and_then(|v| v.as_str()) {
-                                if k == "complete" || k == "blocked" {
-                                    let _ = mgr.on_child_terminal(session_id, k).await;
+            loop {
+                match rx.recv().await {
+                    Ok(ev) => {
+                        if let DomainEvent::SessionEventAppended {
+                            session_id, kind, payload, ..
+                        } = ev {
+                            match kind.as_str() {
+                                "mcp.status_report" => {
+                                    if let Some(k) = payload.get("kind").and_then(|v| v.as_str()) {
+                                        if k == "complete" || k == "blocked" {
+                                            let _ = mgr.on_child_terminal(session_id, k).await;
+                                        }
+                                    }
                                 }
+                                "system.session_ended" => {
+                                    let reason = payload.get("reason").and_then(|v| v.as_str()).unwrap_or("ended");
+                                    let status = if reason == "operator_kill" { "error" } else { "ended" };
+                                    let _ = mgr.on_child_terminal(session_id, status).await;
+                                }
+                                _ => {}
                             }
                         }
-                        "system.session_ended" => {
-                            let reason = payload.get("reason").and_then(|v| v.as_str()).unwrap_or("ended");
-                            let status = if reason == "operator_kill" { "error" } else { "ended" };
-                            let _ = mgr.on_child_terminal(session_id, status).await;
-                        }
-                        _ => {}
                     }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            "terminal reactor lagged by {n} events; some terminal events may be missed (recovery pass will re-fire)"
+                        );
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         });
