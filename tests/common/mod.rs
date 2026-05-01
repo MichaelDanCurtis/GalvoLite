@@ -16,6 +16,19 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
+/// Drop-guard wrapper for `TempDir`. Stores `Option<TempDir>` so that
+/// at-path variants (where the directory is owned externally) can store
+/// `None`. Implements `Deref<Target = TempDir>` so existing callers of
+/// `_dir.path()` continue to compile unchanged.
+pub struct DirGuard(pub Option<TempDir>);
+
+impl std::ops::Deref for DirGuard {
+    type Target = TempDir;
+    fn deref(&self) -> &TempDir {
+        self.0.as_ref().expect("DirGuard: None variant has no path()")
+    }
+}
+
 pub struct TestApp {
     pub router: axum::Router,
     /// Alias of `router` — Sub-plan 3 mcp_* tests use `setup.app`.
@@ -25,7 +38,7 @@ pub struct TestApp {
     /// on the domain-event broadcaster. The router already holds its own
     /// `Arc<SessionManager>`; this is the same Arc, cloned.
     pub mgr: Arc<SessionManager>,
-    pub _dir: TempDir,
+    pub _dir: DirGuard,
 }
 
 pub fn test_app() -> TestApp {
@@ -39,7 +52,7 @@ pub fn test_app() -> TestApp {
         router,
         db,
         mgr,
-        _dir: dir,
+        _dir: DirGuard(Some(dir)),
     }
 }
 
@@ -64,8 +77,41 @@ pub fn test_app_with_bus() -> TestApp {
         router,
         db,
         mgr,
-        _dir: dir,
+        _dir: DirGuard(Some(dir)),
     }
+}
+
+/// Open a `TestApp` at a caller-supplied path. Caller is responsible for
+/// keeping the directory alive (e.g. by holding their own `TempDir`).
+/// Used by Sub-plan 6 recovery tests to simulate a process restart against
+/// the same on-disk state.
+pub fn test_app_with_bus_at(path: &std::path::Path) -> TestApp {
+    let data_dir = path.to_path_buf();
+    let db = Db::open(data_dir.join("test.sqlite")).unwrap();
+    let bus = galvolite::api::events::EventBroadcaster::new(64);
+    let mgr = Arc::new(SessionManager::with_event_bus(
+        db.clone(),
+        data_dir,
+        bus,
+    ));
+    mgr.start_terminal_reactor();
+    let router = galvolite::api::router(mgr.clone());
+    TestApp {
+        app: router.clone(),
+        router,
+        db,
+        mgr,
+        _dir: DirGuard(None),
+    }
+}
+
+/// Same as [`test_app_with_bus_at`]; semantic alias used by recovery tests
+/// after they have dropped a previous `TestApp` at the same path. The
+/// underlying SQLite file is reopened from disk (recovery pass runs in
+/// `with_event_bus`, then the caller may explicitly re-trigger
+/// `recover_pending_rejoins`).
+pub fn reopen_app_with_bus_at(path: &std::path::Path) -> TestApp {
+    test_app_with_bus_at(path)
 }
 
 /// Bind an ephemeral 127.0.0.1 listener for tests that need a real HTTP/WS

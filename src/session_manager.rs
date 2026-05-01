@@ -954,6 +954,46 @@ impl SessionManager {
         }
         Ok(lines.join("\n"))
     }
+
+    /// Restart-time scan: any parent with a non-NULL `waiting_on` whose listed
+    /// children already have terminal_status set should resolve immediately.
+    ///
+    /// Idempotent: replays `on_child_terminal` for already-terminal children;
+    /// `on_child_terminal` is itself idempotent so repeat calls are safe.
+    pub async fn recover_pending_rejoins(&self) -> Result<()> {
+        let parents: Vec<(String, String)> = {
+            let conn = self.db.pool().get()?;
+            let mut stmt = conn.prepare(
+                "SELECT id, waiting_on FROM sessions WHERE waiting_on IS NOT NULL"
+            )?;
+            let collected: Vec<(String, String)> = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .filter_map(|r| r.ok())
+                .collect();
+            collected
+        };
+
+        for (_pid, waiting_json) in parents {
+            let arr: Vec<String> = serde_json::from_str(&waiting_json).unwrap_or_default();
+            for child_str in arr {
+                let cid = match Uuid::parse_str(&child_str) { Ok(u) => u, Err(_) => continue };
+                let term: Option<String> = {
+                    let conn = self.db.pool().get()?;
+                    conn.query_row(
+                        "SELECT terminal_status FROM sessions WHERE id = ?1",
+                        [child_str.as_str()],
+                        |r| r.get::<_, Option<String>>(0),
+                    )
+                    .optional()?
+                    .flatten()
+                };
+                if let Some(status) = term {
+                    self.on_child_terminal(cid, &status).await?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Route a spawn-failure rollback through `apply_event` so it lands as a
