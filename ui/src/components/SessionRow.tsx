@@ -7,9 +7,11 @@ interface Props {
   session: Session;
   onExpand?: (s: Session) => void;
   onRefresh: () => void;
+  depth?: number;
 }
 
-export function SessionRow({ session, onExpand, onRefresh }: Props) {
+export function SessionRow({ session, onExpand, onRefresh, depth }: Props) {
+  const waitingCount = session.waiting_on?.length ?? 0;
   const dotColor = STATE_COLORS[session.state] ?? "bg-gray-400";
 
   const handleKill = async (e: React.MouseEvent) => {
@@ -35,6 +37,7 @@ export function SessionRow({ session, onExpand, onRefresh }: Props) {
       role="button"
       tabIndex={0}
       className="flex items-center gap-3 px-4 py-3 w-full text-left cursor-pointer border-b border-gray-800 hover:bg-gray-800/50 focus:outline-none focus:bg-gray-800/70"
+      style={{ paddingLeft: depth ? depth * 16 : undefined }}
       onClick={() => onExpand?.(session)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -67,6 +70,15 @@ export function SessionRow({ session, onExpand, onRefresh }: Props) {
           )}
         </div>
       </div>
+
+      {waitingCount > 0 && (
+        <span
+          data-testid="waiting-badge"
+          className="text-xs px-2 py-0.5 rounded bg-amber-900 text-amber-300"
+        >
+          waiting on {waitingCount}
+        </span>
+      )}
 
       <span className="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-300">
         {session.state}
