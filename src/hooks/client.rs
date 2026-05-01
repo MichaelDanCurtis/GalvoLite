@@ -64,3 +64,27 @@ pub fn run(
         inject_text: parsed.inject_text,
     })
 }
+
+/// GET /api/sessions/<id>/pending-rejoin. Returns Some(markdown) on 200,
+/// None on any non-2xx (404 normal, others fail-soft per existing convention).
+pub fn fetch_pending_rejoin(env: &ClientEnv) -> Result<Option<String>, ClientError> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(env.timeout_secs))
+        .build()?;
+    let resp = client
+        .get(format!(
+            "{}/api/sessions/{}/pending-rejoin",
+            env.api_base, env.session_id
+        ))
+        .header("Authorization", format!("Bearer {}", env.token))
+        .send()?;
+    if !resp.status().is_success() {
+        return Ok(None);
+    }
+    #[derive(serde::Deserialize)]
+    struct Body {
+        markdown: String,
+    }
+    let body: Body = resp.json()?;
+    Ok(Some(body.markdown))
+}
