@@ -18,6 +18,25 @@ describe("SessionRow", () => {
     );
     expect(container.firstChild).toHaveStyle({ paddingLeft: "48px" });
   });
+  // Regression: smoke bug 1 — Tailwind `px-4` (16px) collided with inline
+  // `paddingLeft: depth * 16`, so depth=1 rendered identically to depth=0.
+  // Lock the invariant numerically: each depth level must increase paddingLeft.
+  it("paddingLeft strictly increases with depth", () => {
+    const px = (depth: number) => {
+      const { container } = render(
+        <SessionRow session={baseSession} depth={depth} onRefresh={() => {}} />
+      );
+      return parseInt(
+        (container.firstChild as HTMLElement).style.paddingLeft,
+        10
+      );
+    };
+    const p0 = px(0);
+    const p1 = px(1);
+    const p2 = px(2);
+    expect(p1).toBeGreaterThan(p0);
+    expect(p2).toBeGreaterThan(p1);
+  });
   it("renders waiting badge when waiting_on populated", () => {
     const s: Session = { ...baseSession, waiting_on: ["c1", "c2", "c3"] };
     render(<SessionRow session={s} onRefresh={() => {}} />);

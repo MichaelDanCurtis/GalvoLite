@@ -1,7 +1,10 @@
 mod common;
+use axum::body::{to_bytes, Body};
+use axum::http::Request;
 use galvolite::db::NewProject;
 use std::process::Command;
 use tempfile::TempDir;
+use tower::ServiceExt;
 
 fn init_git(dir: &std::path::Path) {
     Command::new("git").args(["init", "-q", "-b", "main"]).current_dir(dir).status().unwrap();
@@ -318,4 +321,60 @@ async fn mcp_wait_children_short_circuits_on_already_terminal() {
         |r| r.get(0),
     ).unwrap();
     assert!(pending.as_deref().unwrap_or("").contains("Children resolved"));
+}
+
+/// Regression: smoke bug 2 — `Session` struct missing `waiting_on` field meant
+/// `/api/sessions` and `/api/sessions/:id` silently elided the column even
+/// though the DB held it. DB-level round-trip tests passed; the wire shape
+/// did not. This locks the wire contract: HTTP responses must include
+/// `waiting_on` as a JSON array of UUID strings.
+#[tokio::test]
+async fn api_get_and_list_sessions_serialize_waiting_on_as_array() {
+    let app = common::test_app_with_bus();
+    let proj_dir = TempDir::new().unwrap();
+    init_git(proj_dir.path());
+    let proj = app.mgr.add_project(NewProject {
+        name: "p".into(),
+        path: proj_dir.path().to_string_lossy().into_owned(),
+        remote_url: None,
+    }).unwrap();
+    let parent = app.mgr.spawn_session(
+        proj.id, "p".into(), "implementation".into(), "/bin/cat".into(), vec![],
+    ).await.unwrap();
+    let c1 = app.mgr.spawn_child(parent.id, "implementation", "a").await.unwrap();
+    let c2 = app.mgr.spawn_child(parent.id, "implementation", "b").await.unwrap();
+    app.mgr.set_waiting_on(parent.id, &[c1.id, c2.id]).await.unwrap();
+
+    // GET /api/sessions/:id — single-session shape
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/api/sessions/{}", parent.id))
+        .body(Body::empty()).unwrap();
+    let resp = app.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let arr = v["waiting_on"].as_array()
+        .expect("GET /api/sessions/:id must serialize waiting_on as JSON array");
+    let ids: Vec<&str> = arr.iter().map(|x| x.as_str().unwrap()).collect();
+    assert_eq!(ids.len(), 2);
+    assert!(ids.contains(&c1.id.to_string().as_str()));
+    assert!(ids.contains(&c2.id.to_string().as_str()));
+
+    // GET /api/sessions — list shape
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/sessions")
+        .body(Body::empty()).unwrap();
+    let resp = app.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let bytes = to_bytes(resp.into_body(), 256 * 1024).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let list = v.as_array().unwrap();
+    let pid = parent.id.to_string();
+    let parent_obj = list.iter().find(|s| s["id"] == pid)
+        .expect("list must include parent session");
+    let arr = parent_obj["waiting_on"].as_array()
+        .expect("GET /api/sessions must serialize waiting_on as JSON array");
+    assert_eq!(arr.len(), 2);
 }
