@@ -133,6 +133,66 @@ fn walk_depth(db: &crate::db::Db, session_id: uuid::Uuid) -> crate::error::Resul
     Ok(depth)
 }
 
-async fn wait_children(_ctx: ToolCtx, _args: Value) -> ToolOutcome {
-    ToolOutcome::AppError("not implemented yet".into())
+#[derive(Deserialize)]
+struct WaitArgs {
+    children: Vec<String>,
+}
+
+async fn wait_children(ctx: ToolCtx, args: Value) -> ToolOutcome {
+    let parsed: WaitArgs = match serde_json::from_value(args) {
+        Ok(p) => p,
+        Err(e) => return ToolOutcome::InvalidParams(e.to_string()),
+    };
+    let mut child_ids = Vec::with_capacity(parsed.children.len());
+    for s in &parsed.children {
+        match uuid::Uuid::parse_str(s) {
+            Ok(u) => child_ids.push(u),
+            Err(_) => return ToolOutcome::InvalidParams(format!("not a uuid: {s}")),
+        }
+    }
+
+    // Validate ownership + check whether all are already terminal.
+    let conn = match ctx.mgr.db().pool().get() {
+        Ok(c) => c,
+        Err(e) => return ToolOutcome::AppError(e.to_string()),
+    };
+    let mut all_terminal = true;
+    for cid in &child_ids {
+        let row: Option<(Option<String>, Option<String>)> = conn
+            .query_row(
+                "SELECT parent_session_id, terminal_status FROM sessions WHERE id = ?1",
+                [cid.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok();
+        let Some((parent_str, term)) = row else {
+            return ToolOutcome::AppError(format!("unknown_child: {cid}"));
+        };
+        if parent_str.as_deref() != Some(&ctx.session_id.to_string()) {
+            return ToolOutcome::AppError(format!("not_owned_child: {cid}"));
+        }
+        if term.is_none() {
+            all_terminal = false;
+        }
+    }
+    drop(conn);
+
+    if all_terminal {
+        let md = match ctx.mgr.build_rejoin_markdown(ctx.session_id, &child_ids).await {
+            Ok(m) => m,
+            Err(e) => return ToolOutcome::AppError(e.to_string()),
+        };
+        let conn = ctx.mgr.db().pool().get().unwrap();
+        let _ = conn.execute(
+            "UPDATE sessions SET pending_rejoin = ?1 WHERE id = ?2",
+            rusqlite::params![md, ctx.session_id.to_string()],
+        );
+        drop(conn);
+        return ToolOutcome::Ok(json!({"ok": true, "immediate_rejoin": true}));
+    }
+
+    if let Err(e) = ctx.mgr.set_waiting_on(ctx.session_id, &child_ids).await {
+        return ToolOutcome::AppError(e.to_string());
+    }
+    ToolOutcome::Ok(json!({"ok": true, "immediate_rejoin": false}))
 }

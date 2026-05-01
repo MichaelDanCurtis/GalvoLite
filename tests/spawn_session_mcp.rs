@@ -238,3 +238,84 @@ async fn mcp_spawn_session_rejects_unknown_role() {
     let resp = common::rpc(app.app, &token, body).await;
     assert!(resp["result"]["isError"].as_bool().unwrap_or(false));
 }
+
+#[tokio::test]
+async fn mcp_wait_children_records_waiting_on() {
+    let app = common::test_app_with_bus();
+    let proj_dir = TempDir::new().unwrap();
+    init_git(proj_dir.path());
+    let proj = app.mgr.add_project(NewProject {
+        name: "p".into(),
+        path: proj_dir.path().to_string_lossy().into_owned(),
+        remote_url: None,
+    }).unwrap();
+    let parent = app.mgr.spawn_session(
+        proj.id, "p".into(), "implementation".into(), "/bin/cat".into(), vec![],
+    ).await.unwrap();
+    let c = app.mgr.spawn_child(parent.id, "implementation", "x").await.unwrap();
+    let token = app.db.pool().get().unwrap().query_row(
+        "SELECT api_token FROM sessions WHERE id = ?1",
+        [parent.id.to_string()],
+        |r| r.get::<_, String>(0),
+    ).unwrap();
+
+    let body = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "wait_children", "arguments": {"children": [c.id.to_string()]}}
+    });
+    let resp = common::rpc(app.app, &token, body).await;
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let inner: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(inner["ok"], true);
+    assert_eq!(inner["immediate_rejoin"], false);
+
+    let conn = app.db.pool().get().unwrap();
+    let waiting: String = conn.query_row(
+        "SELECT waiting_on FROM sessions WHERE id = ?1",
+        [parent.id.to_string()],
+        |r| r.get(0),
+    ).unwrap();
+    assert!(waiting.contains(&c.id.to_string()));
+}
+
+#[tokio::test]
+async fn mcp_wait_children_short_circuits_on_already_terminal() {
+    let app = common::test_app_with_bus();
+    let proj_dir = TempDir::new().unwrap();
+    init_git(proj_dir.path());
+    let proj = app.mgr.add_project(NewProject {
+        name: "p".into(),
+        path: proj_dir.path().to_string_lossy().into_owned(),
+        remote_url: None,
+    }).unwrap();
+    let parent = app.mgr.spawn_session(
+        proj.id, "p".into(), "implementation".into(), "/bin/cat".into(), vec![],
+    ).await.unwrap();
+    let c = app.mgr.spawn_child(parent.id, "implementation", "x").await.unwrap();
+    app.db.pool().get().unwrap().execute(
+        "UPDATE sessions SET terminal_status = 'complete' WHERE id = ?1",
+        [c.id.to_string()],
+    ).unwrap();
+    let token = app.db.pool().get().unwrap().query_row(
+        "SELECT api_token FROM sessions WHERE id = ?1",
+        [parent.id.to_string()],
+        |r| r.get::<_, String>(0),
+    ).unwrap();
+
+    let body = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "wait_children", "arguments": {"children": [c.id.to_string()]}}
+    });
+    let resp = common::rpc(app.app, &token, body).await;
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let inner: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(inner["immediate_rejoin"], true);
+
+    let conn = app.db.pool().get().unwrap();
+    let pending: Option<String> = conn.query_row(
+        "SELECT pending_rejoin FROM sessions WHERE id = ?1",
+        [parent.id.to_string()],
+        |r| r.get(0),
+    ).unwrap();
+    assert!(pending.as_deref().unwrap_or("").contains("Children resolved"));
+}
