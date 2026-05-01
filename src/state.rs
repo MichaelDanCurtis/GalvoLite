@@ -495,8 +495,8 @@ pub fn apply_event_with_bus(
         // summary without a follow-up fetch.
         if kind == "session.children_resolved" {
             if let Some(children) = payload.get("children").and_then(|v| v.as_array()) {
-                let mut payload_children = Vec::new();
                 if let Ok(conn) = db.pool().get() {
+                    let mut payload_children = Vec::new();
                     for c in children {
                         if let Some(cid) = c.as_str().and_then(|s| uuid::Uuid::parse_str(s).ok()) {
                             if let Ok((role, status, handoff)) = conn.query_row(
@@ -517,11 +517,15 @@ pub fn apply_event_with_bus(
                             }
                         }
                     }
+                    bus.publish(crate::api::events::DomainEvent::SessionChildrenResolved {
+                        session_id,
+                        children: payload_children,
+                    });
+                } else {
+                    tracing::warn!(
+                        "session.children_resolved fan-out skipped: pool exhausted for {session_id}"
+                    );
                 }
-                bus.publish(crate::api::events::DomainEvent::SessionChildrenResolved {
-                    session_id,
-                    children: payload_children,
-                });
             }
         }
     }
