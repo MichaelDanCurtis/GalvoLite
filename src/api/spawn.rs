@@ -35,7 +35,7 @@ pub async fn get_pending_rejoin(
 
     // --- Authorize: token must belong to the URL-path session ---
     if resolved != session_id {
-        return (StatusCode::UNAUTHORIZED, "token session mismatch").into_response();
+        return (StatusCode::FORBIDDEN, "session_id mismatch").into_response();
     }
 
     // --- Atomic read-and-clear via transaction (Correction C) ---

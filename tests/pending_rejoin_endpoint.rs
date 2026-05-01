@@ -66,3 +66,33 @@ async fn pending_rejoin_unauthorized_without_token() {
     let resp = app.app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn pending_rejoin_forbidden_when_token_resolves_to_different_session() {
+    let app = common::test_app_with_bus();
+    let dir = TempDir::new().unwrap();
+    init_git(dir.path());
+    let proj = app.mgr.add_project(NewProject{
+        name:"p".into(), path: dir.path().to_string_lossy().into_owned(), remote_url: None
+    }).unwrap();
+    let s_a = app.mgr.spawn_session(
+        proj.id, "a".into(), "implementation".into(), "/bin/cat".into(), vec![]
+    ).await.unwrap();
+    let s_b = app.mgr.spawn_session(
+        proj.id, "b".into(), "implementation".into(), "/bin/cat".into(), vec![]
+    ).await.unwrap();
+    let token_a = app.db.pool().get().unwrap().query_row(
+        "SELECT api_token FROM sessions WHERE id = ?1",
+        [s_a.id.to_string()],
+        |r| r.get::<_, String>(0),
+    ).unwrap();
+
+    // Token belongs to s_a but URL path targets s_b → 403.
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/api/sessions/{}/pending-rejoin", s_b.id))
+        .header("Authorization", format!("Bearer {token_a}"))
+        .body(Body::empty()).unwrap();
+    let resp = app.app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
