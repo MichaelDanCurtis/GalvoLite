@@ -30,6 +30,7 @@ export interface Session {
   turn_count?: number;
   est_tokens?: number;
   last_event_kind?: string;
+  waiting_on?: string[] | null;
 }
 
 /**
@@ -100,6 +101,13 @@ export const STATE_COLORS: Record<SessionState, string> = {
 export type PlanStepStatus = "pending" | "working" | "done" | "blocked";
 export interface PlanStep { hash: string; text: string; status: PlanStepStatus; note?: string }
 
+export interface ChildResolution {
+  id: string;
+  role: string;
+  status: "complete" | "blocked" | "error" | "ended" | "unknown";
+  handoff: string | null;
+}
+
 export type DomainEvent =
   | { type: "session.state_changed"; session_id: string; prev: SessionState | null; next: SessionState; last_event_ts: string }
   | { type: "session.event_appended"; session_id: string; event_id: number; kind: string; source: string; ts: string; payload: unknown }
@@ -109,4 +117,9 @@ export type DomainEvent =
   | { type: "session.plan_step_changed"; session_id: string; step_hash: string; prev_status: PlanStepStatus; next_status: PlanStepStatus; note: string | null }
   | { type: "operator.prompt"; prompt_id: string; session_id: string; question: string; choices: string[] | null; timeout_secs: number | null }
   | { type: "operator.toast"; session_id: string; level: "info" | "warn" | "urgent"; message: string }
-  | { type: "session.resumed"; session_id: string; last_events: EventRow[] };
+  | { type: "session.resumed"; session_id: string; last_events: EventRow[] }
+  | {
+      type: "session.children_resolved";
+      session_id: string;
+      children: ChildResolution[];
+    };
