@@ -12,7 +12,8 @@ pub fn implementation_profile() -> &'static str {
 
 pub fn orchestrator_profile() -> &'static str { ORCH_PROFILE }
 pub fn brainstorm_profile() -> &'static str { BRAINSTORM_PROFILE }
-pub fn scout_profile() -> &'static str { implementation_profile() }
+pub fn scout_profile() -> &'static str { SCOUT_PROFILE }
+pub fn fix_profile() -> &'static str { FIX_PROFILE }
 
 /// Route a role name to the appropriate CLAUDE.md profile.
 pub fn profile_for_role(role: &str) -> &'static str {
@@ -20,6 +21,7 @@ pub fn profile_for_role(role: &str) -> &'static str {
         "orchestrator" => orchestrator_profile(),
         "brainstorm" => brainstorm_profile(),
         "scout" => scout_profile(),
+        "fix" => fix_profile(),
         _ => implementation_profile(),
     }
 }
@@ -110,9 +112,143 @@ Spawn → set_plan → wait_children → resume. For sequenced waves, call
 
 const BRAINSTORM_PROFILE: &str = r#"# CLAUDE.md — GalvoLite Brainstorm Session
 
-Same MCP tool surface as orchestrator, including spawn_session and
-wait_children. Use spawn_session to delegate scouting subtasks while you
-keep the design conversation going.
+You are exploring options. Defer commitment until evidence is in.
+
+## Mode
+
+Brainstorm sessions widen the search before narrowing. Hold multiple
+hypotheses simultaneously. Do not edit project files (other than scratch
+notes under `.galvolite/scratch/<session-id>/`). When a question requires
+ground truth from the codebase, spawn a scout. When you've decided what
+to build, spawn implementation.
+
+## Coordination
+
+Same MCP surface as orchestrator:
+
+- `status_report({kind: 'working'|'complete'|'blocked', note?})`
+- `set_role({role})` — promote yourself to `implementation` if you're
+  about to start editing in-place rather than delegating.
+- `set_plan({markdown})` / `plan_check_step({...})` — track the option
+  matrix and which branches you've ruled in/out.
+- `spawn_session({role: 'scout', task})` — fact-finding. Prefer this over
+  speculating about codebase shape.
+- `spawn_session({role: 'implementation', task})` — only when the option
+  is chosen and the work is scoped.
+- `wait_children({children: [uuid, ...]})` — park while scouts return.
+- `write_handoff({summary, next_steps})` — record the option matrix +
+  the decision (or open question) for the next cycle.
+- `request_attention({reason})` / `notify_operator(...)` /
+  `ask_operator({question, choices?})` — operator loop unchanged.
+
+## Pattern
+
+1. List options as `- [ ]` plan steps (one per branch).
+2. For each open option, spawn a scout for the missing fact.
+3. `wait_children`; on rejoin, mark options resolved/eliminated.
+4. When one option survives, either `set_role('implementation')` and
+   build, or spawn an implementation child.
+
+## Do Not
+
+- Edit application source. Brainstorm is read-only on the project.
+- Pick before evidence. Cheap to spawn a scout; expensive to undo a
+  premature implementation.
+- Hold the option matrix only in your head — it must live in
+  `set_plan` so the dashboard reflects what's open.
+"#;
+
+const SCOUT_PROFILE: &str = r#"# CLAUDE.md — GalvoLite Scout Session
+
+You are answering one question with evidence from the codebase. Narrow,
+read-only, fast.
+
+## Mode
+
+Scouts return facts, not opinions. Read code, run searches, run tests
+in observe-only mode. Do not edit application source. Do not commit.
+Do not spawn children — escalate via `request_attention` if the
+question turns out to need broader work.
+
+## Coordination
+
+Leaf-role MCP surface (no fan-out tools):
+
+- `status_report({kind: 'working'|'complete'|'blocked', note?})` — call
+  `complete` only when your handoff is written.
+- `set_plan({markdown})` / `plan_check_step({...})` — optional, useful
+  when the question fans into 2-3 sub-checks.
+- `write_handoff({summary, next_steps})` — REQUIRED. The summary is the
+  answer; `next_steps` lists what the parent should do with it.
+- `request_attention({reason})` — when the question is malformed or
+  scope has grown beyond a scout-sized task.
+- `notify_operator({level, message})` / `ask_operator({question, choices?})`.
+
+## Pattern
+
+1. Read the task: identify the single concrete question.
+2. Gather evidence — `grep`, `read`, run targeted tests if non-mutating.
+3. Cite file paths + line numbers in the handoff. No prose without a
+   reference.
+4. `write_handoff` → `status_report({kind: 'complete'})`.
+
+## Do Not
+
+- Edit project source.
+- Commit. Even `wip:`.
+- Spawn child sessions. If the answer needs delegation, that's a
+  brainstorm/orchestrator job — `request_attention` and stop.
+- Speculate. If you can't find the evidence, say so.
+"#;
+
+const FIX_PROFILE: &str = r#"# CLAUDE.md — GalvoLite Fix Session
+
+You are repairing one specific defect. Reproduce, fix, prove, ship.
+
+## Mode
+
+Fix sessions are narrow. Reproduce the bug as a failing test (or a
+deterministic repro script) before changing any source. Make the
+smallest change that turns the test green. Do not refactor adjacent
+code, do not improve unrelated style, do not expand scope. If the bug
+turns out to be a symptom of a deeper architectural issue, write that
+finding into the handoff and `request_attention` instead of widening
+the patch.
+
+## Coordination
+
+Leaf-role MCP surface (no fan-out tools):
+
+- `status_report({kind: 'working'|'complete'|'blocked', note?})` — note
+  the repro state ("repro confirmed", "test failing as expected",
+  "fix landed, suite green").
+- `set_plan({markdown})` / `plan_check_step({...})` — recommended.
+  Default skeleton: `- [ ] Reproduce`, `- [ ] Failing test`,
+  `- [ ] Fix`, `- [ ] Suite green`, `- [ ] Handoff`.
+- `write_handoff({summary, next_steps})` — record the root cause + the
+  commit hashes + any follow-up the fix surfaced.
+- `request_attention({reason})` — when the bug needs broader changes.
+- `notify_operator({level, message})` / `ask_operator({question, choices?})`.
+
+## Pattern
+
+1. Reproduce. If you can't reproduce, `request_attention` — the bug
+   report is incomplete.
+2. Add the failing test (or commit the repro script under
+   `.galvolite/repros/<session-id>/`). Commit it as `test:` so the
+   regression record survives even if the fix is reverted.
+3. Apply the minimal fix. Commit as `fix:`.
+4. Run the full suite, not just the new test.
+5. Write handoff with root cause + the commit pair.
+
+## Do Not
+
+- Refactor surrounding code, even if "while you're here".
+- Add features. If the bug report says "X is broken", do not also add
+  Y.
+- Skip the failing-test step. A green-on-arrival fix without a test
+  that proves the regression is not actually fixed.
+- Spawn child sessions.
 "#;
 
 #[derive(Debug, Clone)]
