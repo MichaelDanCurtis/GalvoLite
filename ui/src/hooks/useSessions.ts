@@ -60,6 +60,12 @@ export function useSessions() {
           next[i] = updated;
           return next;
         }
+        case "session.children_resolved": {
+          const updated = { ...session, waiting_on: null };
+          const next = [...prev];
+          next[i] = updated;
+          return next;
+        }
         default:
           return prev;
       }
@@ -98,5 +104,7 @@ export function useSessions() {
     triggerHandoff,
     killSession,
     toggleAutopilot,
+    // Test-only seam: lets vitest seed sessions without round-tripping the API.
+    _seed: setSessions,
   };
 }
