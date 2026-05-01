@@ -5,4 +5,5 @@
 //! binary at `src/bin/galvolite-hook.rs` and by unit tests via `mockito`.
 
 pub mod client;
+pub mod marker;
 pub mod types;
