@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::broadcast;
 use uuid::Uuid;
+use rusqlite::OptionalExtension;
 
 struct RunningSession {
     driver: Arc<RitualDriver>,
@@ -753,6 +754,56 @@ impl SessionManager {
             rs.driver.clone()
         };
         Ok(driver.state().await)
+    }
+
+    pub async fn set_waiting_on(&self, parent_id: Uuid, children: &[Uuid]) -> Result<()> {
+        let conn = self.db.pool().get()?;
+        for c in children {
+            let pid: Option<String> = conn.query_row(
+                "SELECT parent_session_id FROM sessions WHERE id = ?1",
+                [c.to_string()], |r| r.get(0),
+            ).optional()?;
+            match pid {
+                Some(s) if s == parent_id.to_string() => {}
+                _ => return Err(Error::Config(format!("child {c} not owned by parent {parent_id}"))),
+            }
+        }
+        let json = serde_json::to_string(&children.iter().map(|u| u.to_string()).collect::<Vec<_>>())?;
+        conn.execute(
+            "UPDATE sessions SET waiting_on = ?1 WHERE id = ?2",
+            rusqlite::params![json, parent_id.to_string()],
+        )?;
+        let _ = crate::state::apply_event_with_bus(
+            &self.db, parent_id, &self.event_bus,
+            crate::state::EventInput {
+                source: crate::state::Source::Mcp,
+                kind: "mcp.wait_children".into(),
+                payload: serde_json::json!({ "children": children.iter().map(|u| u.to_string()).collect::<Vec<_>>() }),
+                dedup_key: None,
+            },
+        );
+        Ok(())
+    }
+
+    pub async fn build_rejoin_markdown(&self, parent_id: Uuid, children: &[Uuid]) -> Result<String> {
+        let conn = self.db.pool().get()?;
+        let mut lines = Vec::with_capacity(children.len() + 2);
+        lines.push("Children resolved. Resume.".to_string());
+        lines.push(String::new());
+        for cid in children {
+            let row: Option<(String, Option<String>, Option<String>)> = conn.query_row(
+                "SELECT role, terminal_status, handoff_path FROM sessions \
+                 WHERE id = ?1 AND parent_session_id = ?2",
+                rusqlite::params![cid.to_string(), parent_id.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            ).optional()?;
+            let Some((role, status, handoff)) = row else { continue };
+            let short = &cid.simple().to_string()[..8];
+            let status_s = status.as_deref().unwrap_or("unknown");
+            let handoff_s = handoff.as_deref().unwrap_or("none");
+            lines.push(format!("- {short} role={role} status={status_s} handoff={handoff_s}"));
+        }
+        Ok(lines.join("\n"))
     }
 }
 

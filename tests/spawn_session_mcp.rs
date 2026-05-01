@@ -37,3 +37,57 @@ async fn spawn_child_creates_worktree_and_db_row_with_parent() {
     assert!(child.branch.as_deref().unwrap().starts_with("galvolite/"));
     assert_ne!(child.worktree_path, parent.worktree_path);
 }
+
+#[tokio::test]
+async fn set_waiting_on_persists_json_array() {
+    let app = common::test_app_with_bus();
+    let proj_dir = TempDir::new().unwrap();
+    init_git(proj_dir.path());
+    let proj = app.mgr.add_project(NewProject{
+        name:"p".into(), path: proj_dir.path().to_string_lossy().into_owned(), remote_url: None
+    }).unwrap();
+    let parent = app.mgr.spawn_session(
+        proj.id, "parent".into(), "implementation".into(), "/bin/cat".into(), vec![]
+    ).await.unwrap();
+    let c1 = app.mgr.spawn_child(parent.id, "implementation", "a").await.unwrap();
+    let c2 = app.mgr.spawn_child(parent.id, "implementation", "b").await.unwrap();
+
+    app.mgr.set_waiting_on(parent.id, &[c1.id, c2.id]).await.unwrap();
+
+    let conn = app.db.pool().get().unwrap();
+    let waiting: String = conn.query_row(
+        "SELECT waiting_on FROM sessions WHERE id = ?1",
+        [parent.id.to_string()],
+        |r| r.get(0)
+    ).unwrap();
+    let parsed: Vec<String> = serde_json::from_str(&waiting).unwrap();
+    assert_eq!(parsed.len(), 2);
+    assert!(parsed.contains(&c1.id.to_string()));
+    assert!(parsed.contains(&c2.id.to_string()));
+}
+
+#[tokio::test]
+async fn build_rejoin_markdown_lists_each_child() {
+    let app = common::test_app_with_bus();
+    let proj_dir = TempDir::new().unwrap();
+    init_git(proj_dir.path());
+    let proj = app.mgr.add_project(NewProject{
+        name:"p".into(), path: proj_dir.path().to_string_lossy().into_owned(), remote_url: None
+    }).unwrap();
+    let parent = app.mgr.spawn_session(
+        proj.id, "p".into(), "implementation".into(), "/bin/cat".into(), vec![]
+    ).await.unwrap();
+    let c = app.mgr.spawn_child(parent.id, "implementation", "x").await.unwrap();
+    let conn = app.db.pool().get().unwrap();
+    conn.execute(
+        "UPDATE sessions SET terminal_status = 'complete', handoff_path = '/tmp/h.md' WHERE id = ?1",
+        [c.id.to_string()],
+    ).unwrap();
+    drop(conn);
+
+    let md = app.mgr.build_rejoin_markdown(parent.id, &[c.id]).await.unwrap();
+    assert!(md.starts_with("Children resolved. Resume."));
+    assert!(md.contains(&c.id.simple().to_string()[..8]));
+    assert!(md.contains("status=complete"));
+    assert!(md.contains("handoff=/tmp/h.md"));
+}
