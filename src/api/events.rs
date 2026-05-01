@@ -62,6 +62,19 @@ pub enum DomainEvent {
     OperatorToast { session_id: Uuid, level: String, message: String },
     #[serde(rename = "session.resumed")]
     SessionResumed { session_id: Uuid, last_events: serde_json::Value },
+    #[serde(rename = "session.children_resolved")]
+    SessionChildrenResolved {
+        session_id: Uuid,
+        children: Vec<ChildResolution>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChildResolution {
+    pub id: Uuid,
+    pub role: String,
+    pub status: String,
+    pub handoff: Option<String>,
 }
 
 #[derive(Clone)]
@@ -102,7 +115,8 @@ impl DomainEvent {
             | DomainEvent::SessionPlanStepChanged { session_id, .. }
             | DomainEvent::OperatorPrompt { session_id, .. }
             | DomainEvent::OperatorToast { session_id, .. }
-            | DomainEvent::SessionResumed { session_id, .. } => *session_id == sid,
+            | DomainEvent::SessionResumed { session_id, .. }
+            | DomainEvent::SessionChildrenResolved { session_id, .. } => *session_id == sid,
         }
     }
 }

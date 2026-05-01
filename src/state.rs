@@ -489,6 +489,41 @@ pub fn apply_event_with_bus(
                 }
             }
         }
+        // Sub-plan 6: emit typed `SessionChildrenResolved` when all watched
+        // children have terminated. Looks up each child's role/terminal_status/
+        // handoff_path from the sessions table so the frontend can render a
+        // summary without a follow-up fetch.
+        if kind == "session.children_resolved" {
+            if let Some(children) = payload.get("children").and_then(|v| v.as_array()) {
+                let mut payload_children = Vec::new();
+                if let Ok(conn) = db.pool().get() {
+                    for c in children {
+                        if let Some(cid) = c.as_str().and_then(|s| uuid::Uuid::parse_str(s).ok()) {
+                            if let Ok((role, status, handoff)) = conn.query_row(
+                                "SELECT role, terminal_status, handoff_path FROM sessions WHERE id = ?1",
+                                [cid.to_string()],
+                                |r| Ok((
+                                    r.get::<_, String>(0)?,
+                                    r.get::<_, Option<String>>(1)?,
+                                    r.get::<_, Option<String>>(2)?,
+                                )),
+                            ) {
+                                payload_children.push(crate::api::events::ChildResolution {
+                                    id: cid,
+                                    role,
+                                    status: status.unwrap_or_else(|| "unknown".into()),
+                                    handoff,
+                                });
+                            }
+                        }
+                    }
+                }
+                bus.publish(crate::api::events::DomainEvent::SessionChildrenResolved {
+                    session_id,
+                    children: payload_children,
+                });
+            }
+        }
     }
     Ok(outcome)
 }
@@ -557,6 +592,14 @@ fn transition(current: SessionState, kind: &str) -> SessionState {
         (s, "mcp.send_to_session") if !s.is_terminal() => s,
         (s, "mcp.ask_operator")    if !s.is_terminal() => s,
         (s, "mcp.notify_operator") if !s.is_terminal() => s,
+
+        // Sub-plan 6 §spawn/fan-out/rejoin. All logging-only:
+        //  - `mcp.spawn_session` records that this session spawned a child.
+        //  - `mcp.wait_children` records that this session is now blocking on its children.
+        //  - `session.children_resolved` is the system marker that all watched children terminated.
+        (s, "mcp.spawn_session")        if !s.is_terminal() => s,
+        (s, "mcp.wait_children")        if !s.is_terminal() => s,
+        (s, "session.children_resolved") if !s.is_terminal() => s,
 
         // Everything else logs but doesn't change state. Includes:
         //  - mcp.* tool calls (Sub-plan 3) other than the few that transition above
