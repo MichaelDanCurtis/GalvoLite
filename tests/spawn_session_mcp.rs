@@ -91,3 +91,60 @@ async fn build_rejoin_markdown_lists_each_child() {
     assert!(md.contains("status=complete"));
     assert!(md.contains("handoff=/tmp/h.md"));
 }
+
+#[tokio::test]
+async fn on_child_terminal_clears_one_of_two_children() {
+    let app = common::test_app_with_bus();
+    let proj_dir = TempDir::new().unwrap();
+    init_git(proj_dir.path());
+    let proj = app.mgr.add_project(NewProject{
+        name:"p".into(), path: proj_dir.path().to_string_lossy().into_owned(), remote_url: None
+    }).unwrap();
+    let parent = app.mgr.spawn_session(
+        proj.id, "p".into(), "implementation".into(), "/bin/cat".into(), vec![]
+    ).await.unwrap();
+    let c1 = app.mgr.spawn_child(parent.id, "implementation", "a").await.unwrap();
+    let c2 = app.mgr.spawn_child(parent.id, "implementation", "b").await.unwrap();
+    app.mgr.set_waiting_on(parent.id, &[c1.id, c2.id]).await.unwrap();
+
+    app.mgr.on_child_terminal(c1.id, "complete").await.unwrap();
+
+    let conn = app.db.pool().get().unwrap();
+    let (waiting, pending): (Option<String>, Option<String>) = conn.query_row(
+        "SELECT waiting_on, pending_rejoin FROM sessions WHERE id = ?1",
+        [parent.id.to_string()], |r| Ok((r.get(0)?, r.get(1)?))
+    ).unwrap();
+    let arr: Vec<String> = serde_json::from_str(waiting.as_deref().unwrap()).unwrap();
+    assert_eq!(arr.len(), 1);
+    assert!(arr.contains(&c2.id.to_string()));
+    assert!(pending.is_none(), "no rejoin yet — c2 still pending");
+}
+
+#[tokio::test]
+async fn on_child_terminal_writes_pending_rejoin_when_last() {
+    let app = common::test_app_with_bus();
+    let proj_dir = TempDir::new().unwrap();
+    init_git(proj_dir.path());
+    let proj = app.mgr.add_project(NewProject{
+        name:"p".into(), path: proj_dir.path().to_string_lossy().into_owned(), remote_url: None
+    }).unwrap();
+    let parent = app.mgr.spawn_session(
+        proj.id, "p".into(), "implementation".into(), "/bin/cat".into(), vec![]
+    ).await.unwrap();
+    let c = app.mgr.spawn_child(parent.id, "implementation", "x").await.unwrap();
+    app.mgr.set_waiting_on(parent.id, &[c.id]).await.unwrap();
+
+    app.mgr.on_child_terminal(c.id, "complete").await.unwrap();
+
+    let conn = app.db.pool().get().unwrap();
+    let (waiting, pending, term_status): (Option<String>, Option<String>, Option<String>) =
+        conn.query_row(
+            "SELECT s.waiting_on, s.pending_rejoin, c.terminal_status \
+             FROM sessions s JOIN sessions c ON c.id = ?2 WHERE s.id = ?1",
+            [parent.id.to_string(), c.id.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).unwrap();
+    assert!(waiting.is_none(), "waiting_on cleared");
+    assert!(pending.as_deref().unwrap().contains("Children resolved"));
+    assert_eq!(term_status.as_deref(), Some("complete"));
+}

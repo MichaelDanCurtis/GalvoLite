@@ -785,6 +785,95 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Called from three sites: mcp.status_report (kind=complete|blocked) side-effect,
+    /// PTY exit handler (status=ended|error), and recovery startup pass.
+    /// Idempotent: writing the same terminal_status twice is a no-op.
+    pub async fn on_child_terminal(&self, child_id: Uuid, status: &str) -> Result<()> {
+        let mut conn = self.db.pool().get()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+        // 1. Stamp child's terminal_status (first writer wins).
+        tx.execute(
+            "UPDATE sessions SET terminal_status = COALESCE(terminal_status, ?1) WHERE id = ?2",
+            rusqlite::params![status, child_id.to_string()],
+        )?;
+
+        // 2. Find every parent observing this child.
+        let mut stmt = tx.prepare(
+            "SELECT id, waiting_on FROM sessions WHERE waiting_on LIKE ?1"
+        )?;
+        let pattern = format!("%{}%", child_id);
+        let parents: Vec<(String, String)> = stmt
+            .query_map([pattern], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+
+        let mut newly_resolved: Vec<(Uuid, Vec<Uuid>)> = Vec::new();
+
+        for (parent_id_str, waiting_json) in parents {
+            let parent_id = Uuid::parse_str(&parent_id_str)
+                .map_err(|e| Error::Config(format!("bad parent uuid: {e}")))?;
+            let mut arr: Vec<String> = serde_json::from_str(&waiting_json).unwrap_or_default();
+            let before = arr.len();
+            arr.retain(|s| s != &child_id.to_string());
+            if arr.len() == before { continue; }
+
+            if arr.is_empty() {
+                // All children resolved — clear waiting_on, populate pending_rejoin.
+                // Capture the child set BEFORE clearing for the markdown query.
+                let original: Vec<Uuid> = serde_json::from_str::<Vec<String>>(&waiting_json)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|s| Uuid::parse_str(&s).ok())
+                    .collect();
+                tx.execute(
+                    "UPDATE sessions SET waiting_on = NULL WHERE id = ?1",
+                    [parent_id_str],
+                )?;
+                newly_resolved.push((parent_id, original));
+            } else {
+                tx.execute(
+                    "UPDATE sessions SET waiting_on = ?1 WHERE id = ?2",
+                    rusqlite::params![serde_json::to_string(&arr).unwrap(), parent_id_str],
+                )?;
+            }
+        }
+        tx.commit()?;
+
+        // 3. Outside the transaction: build markdown, write pending_rejoin, fire events,
+        //    nudge PTY. Each parent independent.
+        for (parent_id, child_set) in newly_resolved {
+            let md = self.build_rejoin_markdown(parent_id, &child_set).await?;
+            let conn = self.db.pool().get()?;
+            conn.execute(
+                "UPDATE sessions SET pending_rejoin = ?1 WHERE id = ?2",
+                rusqlite::params![md, parent_id.to_string()],
+            )?;
+            let _ = crate::state::apply_event_with_bus(
+                &self.db, parent_id, &self.event_bus,
+                crate::state::EventInput {
+                    source: crate::state::Source::System,
+                    kind: "session.children_resolved".into(),
+                    payload: serde_json::json!({
+                        "children": child_set.iter().map(|u| u.to_string()).collect::<Vec<_>>()
+                    }),
+                    dedup_key: Some(format!("children-resolved:{parent_id}")),
+                },
+            );
+            // Wake the parent's PTY if it is alive.
+            let marker = format!("[GALVOLITE:REJOIN {}]\n", parent_id);
+            let running_handle = {
+                let running = self.running.lock().unwrap();
+                running.get(&parent_id).map(|rs| rs.handle.clone())
+            };
+            if let Some(h) = running_handle {
+                let _ = h.write_str(&marker).await;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn build_rejoin_markdown(&self, parent_id: Uuid, children: &[Uuid]) -> Result<String> {
         let conn = self.db.pool().get()?;
         let mut lines = Vec::with_capacity(children.len() + 2);
