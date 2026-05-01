@@ -37,7 +37,7 @@ export function SessionRow({ session, onExpand, onRefresh, depth }: Props) {
       role="button"
       tabIndex={0}
       className="flex items-center gap-3 px-4 py-3 w-full text-left cursor-pointer border-b border-gray-800 hover:bg-gray-800/50 focus:outline-none focus:bg-gray-800/70"
-      style={{ paddingLeft: depth ? depth * 16 : undefined }}
+      style={{ paddingLeft: 16 + (depth ?? 0) * 16 }}
       onClick={() => onExpand?.(session)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {

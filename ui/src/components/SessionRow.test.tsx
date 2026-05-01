@@ -16,7 +16,7 @@ describe("SessionRow", () => {
     const { container } = render(
       <SessionRow session={baseSession} depth={2} onRefresh={() => {}} />
     );
-    expect(container.firstChild).toHaveStyle({ paddingLeft: "32px" });
+    expect(container.firstChild).toHaveStyle({ paddingLeft: "48px" });
   });
   it("renders waiting badge when waiting_on populated", () => {
     const s: Session = { ...baseSession, waiting_on: ["c1", "c2", "c3"] };

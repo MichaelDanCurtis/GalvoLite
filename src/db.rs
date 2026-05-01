@@ -111,6 +111,16 @@ fn parse_datetime(s: &str) -> rusqlite::Result<DateTime<Utc>> {
         })
 }
 
+fn parse_waiting_on(raw: Option<String>) -> Option<Vec<Uuid>> {
+    let s = raw?;
+    let strs: Vec<String> = serde_json::from_str(&s).ok()?;
+    Some(
+        strs.into_iter()
+            .filter_map(|x| Uuid::parse_str(&x).ok())
+            .collect(),
+    )
+}
+
 // ---------- types ----------
 
 #[derive(Debug, Clone, Serialize)]
@@ -143,6 +153,12 @@ pub struct Session {
     pub task_summary: String,
     pub created_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_on: Option<Vec<Uuid>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_rejoin: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_status: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -300,6 +316,9 @@ impl Db {
             task_summary: new.task_summary,
             created_at: now,
             ended_at: None,
+            waiting_on: None,
+            pending_rejoin: None,
+            terminal_status: None,
         })
     }
 
@@ -307,7 +326,8 @@ impl Db {
         let conn = self.pool.get()?;
         conn.query_row(
             "SELECT id, project_id, role, branch, worktree_path, pty_pid, state,
-                    autopilot, parent_session_id, task_summary, created_at, ended_at
+                    autopilot, parent_session_id, task_summary, created_at, ended_at,
+                    waiting_on, pending_rejoin, terminal_status
              FROM sessions WHERE id = ?1",
             params![id.to_string()],
             |r| {
@@ -327,6 +347,7 @@ impl Db {
                     Some(s) => Some(parse_datetime(&s)?),
                     None => None,
                 };
+                let waiting_on = parse_waiting_on(r.get::<_, Option<String>>(12)?);
                 Ok(Session {
                     id: parse_uuid(&r.get::<_, String>(0)?)?,
                     project_id: parse_uuid(&r.get::<_, String>(1)?)?,
@@ -340,6 +361,9 @@ impl Db {
                     task_summary: r.get(9)?,
                     created_at: parse_datetime(&r.get::<_, String>(10)?)?,
                     ended_at: ended,
+                    waiting_on,
+                    pending_rejoin: r.get(13)?,
+                    terminal_status: r.get(14)?,
                 })
             },
         )
@@ -353,7 +377,8 @@ impl Db {
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, project_id, role, branch, worktree_path, pty_pid, state,
-                    autopilot, parent_session_id, task_summary, created_at, ended_at
+                    autopilot, parent_session_id, task_summary, created_at, ended_at,
+                    waiting_on, pending_rejoin, terminal_status
              FROM sessions WHERE ended_at IS NULL ORDER BY created_at ASC",
         )?;
         let rows = stmt
@@ -377,6 +402,7 @@ impl Db {
                     Some(s) => Some(parse_datetime(&s)?),
                     None => None,
                 };
+                let waiting_on = parse_waiting_on(r.get::<_, Option<String>>(12)?);
                 Ok(Session {
                     id: parse_uuid(&r.get::<_, String>(0)?)?,
                     project_id: parse_uuid(&r.get::<_, String>(1)?)?,
@@ -390,6 +416,9 @@ impl Db {
                     task_summary: r.get(9)?,
                     created_at: parse_datetime(&r.get::<_, String>(10)?)?,
                     ended_at: ended,
+                    waiting_on,
+                    pending_rejoin: r.get(13)?,
+                    terminal_status: r.get(14)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
