@@ -148,3 +148,39 @@ async fn on_child_terminal_writes_pending_rejoin_when_last() {
     assert!(pending.as_deref().unwrap().contains("Children resolved"));
     assert_eq!(term_status.as_deref(), Some("complete"));
 }
+
+#[tokio::test]
+async fn status_report_complete_triggers_on_child_terminal_via_state() {
+    let app = common::test_app_with_bus();
+    let proj_dir = TempDir::new().unwrap();
+    init_git(proj_dir.path());
+    let proj = app.mgr.add_project(NewProject{
+        name:"p".into(), path: proj_dir.path().to_string_lossy().into_owned(), remote_url: None
+    }).unwrap();
+    let parent = app.mgr.spawn_session(
+        proj.id, "p".into(), "implementation".into(), "/bin/cat".into(), vec![]
+    ).await.unwrap();
+    let c = app.mgr.spawn_child(parent.id, "implementation", "x").await.unwrap();
+    app.mgr.set_waiting_on(parent.id, &[c.id]).await.unwrap();
+
+    // Simulate the child reporting complete via the same path mcp tools use.
+    galvolite::state::apply_event_with_bus(
+        &app.db, c.id, app.mgr.event_bus(),
+        galvolite::state::EventInput {
+            source: galvolite::state::Source::Mcp,
+            kind: "mcp.status_report".into(),
+            payload: serde_json::json!({"kind":"complete"}),
+            dedup_key: None,
+        }
+    ).unwrap();
+
+    // Allow the spawned task in apply_event_with_bus to run.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let conn = app.db.pool().get().unwrap();
+    let pending: Option<String> = conn.query_row(
+        "SELECT pending_rejoin FROM sessions WHERE id = ?1",
+        [parent.id.to_string()], |r| r.get(0)
+    ).unwrap();
+    assert!(pending.as_deref().unwrap_or("").contains("Children resolved"));
+}

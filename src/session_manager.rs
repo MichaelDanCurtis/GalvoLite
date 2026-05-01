@@ -785,71 +785,119 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Spawn a background task that listens to the event bus and invokes
+    /// `on_child_terminal` when an event indicates a session has terminated.
+    ///
+    /// Three trigger paths handled:
+    /// - `mcp.status_report` with payload `kind=complete|blocked` → child reported done
+    /// - `system.session_ended` with `reason=operator_kill` → terminal status "error"
+    /// - `system.session_ended` with any other reason → terminal status "ended"
+    ///
+    /// Errors from `on_child_terminal` are swallowed (best-effort fan-out).
+    pub fn start_terminal_reactor(self: &Arc<Self>) {
+        let mgr = Arc::clone(self);
+        let mut rx = self.event_bus.subscribe();
+        tokio::spawn(async move {
+            while let Ok(ev) = rx.recv().await {
+                if let DomainEvent::SessionEventAppended {
+                    session_id, kind, payload, ..
+                } = ev {
+                    match kind.as_str() {
+                        "mcp.status_report" => {
+                            if let Some(k) = payload.get("kind").and_then(|v| v.as_str()) {
+                                if k == "complete" || k == "blocked" {
+                                    let _ = mgr.on_child_terminal(session_id, k).await;
+                                }
+                            }
+                        }
+                        "system.session_ended" => {
+                            let reason = payload.get("reason").and_then(|v| v.as_str()).unwrap_or("ended");
+                            let status = if reason == "operator_kill" { "error" } else { "ended" };
+                            let _ = mgr.on_child_terminal(session_id, status).await;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        });
+    }
+
     /// Called from three sites: mcp.status_report (kind=complete|blocked) side-effect,
     /// PTY exit handler (status=ended|error), and recovery startup pass.
     /// Idempotent: writing the same terminal_status twice is a no-op.
     pub async fn on_child_terminal(&self, child_id: Uuid, status: &str) -> Result<()> {
-        let mut conn = self.db.pool().get()?;
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        // Phase 1: all synchronous DB work in a block so no non-Send types
+        // (Transaction, Statement, PooledConnection) are held across any
+        // `.await` point in phase 2. The block returns only Send data.
+        let newly_resolved: Vec<(Uuid, Vec<Uuid>)> = {
+            let mut conn = self.db.pool().get()?;
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
-        // 1. Stamp child's terminal_status (first writer wins).
-        tx.execute(
-            "UPDATE sessions SET terminal_status = COALESCE(terminal_status, ?1) WHERE id = ?2",
-            rusqlite::params![status, child_id.to_string()],
-        )?;
+            // 1. Stamp child's terminal_status (first writer wins).
+            tx.execute(
+                "UPDATE sessions SET terminal_status = COALESCE(terminal_status, ?1) WHERE id = ?2",
+                rusqlite::params![status, child_id.to_string()],
+            )?;
 
-        // 2. Find every parent observing this child.
-        let mut stmt = tx.prepare(
-            "SELECT id, waiting_on FROM sessions WHERE waiting_on LIKE ?1"
-        )?;
-        let pattern = format!("%{}%", child_id);
-        let parents: Vec<(String, String)> = stmt
-            .query_map([pattern], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .filter_map(|r| r.ok())
-            .collect();
-        drop(stmt);
+            // 2. Find every parent observing this child.
+            let mut stmt = tx.prepare(
+                "SELECT id, waiting_on FROM sessions WHERE waiting_on LIKE ?1"
+            )?;
+            let pattern = format!("%{}%", child_id);
+            let parents: Vec<(String, String)> = stmt
+                .query_map([pattern], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .filter_map(|r| r.ok())
+                .collect();
+            drop(stmt);
 
-        let mut newly_resolved: Vec<(Uuid, Vec<Uuid>)> = Vec::new();
+            let mut newly_resolved: Vec<(Uuid, Vec<Uuid>)> = Vec::new();
 
-        for (parent_id_str, waiting_json) in parents {
-            let parent_id = Uuid::parse_str(&parent_id_str)
-                .map_err(|e| Error::Config(format!("bad parent uuid: {e}")))?;
-            let mut arr: Vec<String> = serde_json::from_str(&waiting_json).unwrap_or_default();
-            let before = arr.len();
-            arr.retain(|s| s != &child_id.to_string());
-            if arr.len() == before { continue; }
+            for (parent_id_str, waiting_json) in parents {
+                let parent_id = Uuid::parse_str(&parent_id_str)
+                    .map_err(|e| Error::Config(format!("bad parent uuid: {e}")))?;
+                let mut arr: Vec<String> = serde_json::from_str(&waiting_json).unwrap_or_default();
+                let before = arr.len();
+                arr.retain(|s| s != &child_id.to_string());
+                if arr.len() == before { continue; }
 
-            if arr.is_empty() {
-                // All children resolved — clear waiting_on, populate pending_rejoin.
-                // Capture the child set BEFORE clearing for the markdown query.
-                let original: Vec<Uuid> = serde_json::from_str::<Vec<String>>(&waiting_json)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|s| Uuid::parse_str(&s).ok())
-                    .collect();
-                tx.execute(
-                    "UPDATE sessions SET waiting_on = NULL WHERE id = ?1",
-                    [parent_id_str],
-                )?;
-                newly_resolved.push((parent_id, original));
-            } else {
-                tx.execute(
-                    "UPDATE sessions SET waiting_on = ?1 WHERE id = ?2",
-                    rusqlite::params![serde_json::to_string(&arr).unwrap(), parent_id_str],
-                )?;
+                if arr.is_empty() {
+                    // All children resolved — clear waiting_on, populate pending_rejoin.
+                    // Capture the child set BEFORE clearing for the markdown query.
+                    let original: Vec<Uuid> = serde_json::from_str::<Vec<String>>(&waiting_json)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter_map(|s| Uuid::parse_str(&s).ok())
+                        .collect();
+                    tx.execute(
+                        "UPDATE sessions SET waiting_on = NULL WHERE id = ?1",
+                        [parent_id_str],
+                    )?;
+                    newly_resolved.push((parent_id, original));
+                } else {
+                    tx.execute(
+                        "UPDATE sessions SET waiting_on = ?1 WHERE id = ?2",
+                        rusqlite::params![serde_json::to_string(&arr).unwrap(), parent_id_str],
+                    )?;
+                }
             }
-        }
-        tx.commit()?;
+            tx.commit()?;
+            // conn, tx, stmt all drop here — before any await.
+            newly_resolved
+        };
 
+        // Phase 2: async work. No non-Send DB handles in scope.
         // 3. Outside the transaction: build markdown, write pending_rejoin, fire events,
         //    nudge PTY. Each parent independent.
         for (parent_id, child_set) in newly_resolved {
             let md = self.build_rejoin_markdown(parent_id, &child_set).await?;
-            let conn = self.db.pool().get()?;
-            conn.execute(
-                "UPDATE sessions SET pending_rejoin = ?1 WHERE id = ?2",
-                rusqlite::params![md, parent_id.to_string()],
-            )?;
+            {
+                let conn = self.db.pool().get()?;
+                conn.execute(
+                    "UPDATE sessions SET pending_rejoin = ?1 WHERE id = ?2",
+                    rusqlite::params![md, parent_id.to_string()],
+                )?;
+                // conn drops here, before the PTY await below.
+            }
             let _ = crate::state::apply_event_with_bus(
                 &self.db, parent_id, &self.event_bus,
                 crate::state::EventInput {

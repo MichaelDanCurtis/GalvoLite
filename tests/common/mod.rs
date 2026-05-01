@@ -57,6 +57,7 @@ pub fn test_app_with_bus() -> TestApp {
         data_dir,
         bus,
     ));
+    mgr.start_terminal_reactor();
     let router = galvolite::api::router(mgr.clone());
     TestApp {
         app: router.clone(),

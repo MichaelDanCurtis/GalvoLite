@@ -19,6 +19,7 @@ async fn main() -> Result<()> {
 
     let db = galvolite::db::Db::open(data_dir.join("galvolite.sqlite"))?;
     let mgr = Arc::new(SessionManager::new(db.clone(), data_dir));
+    mgr.start_terminal_reactor();
 
     match cli.cmd {
         Command::AddProject { path, name } => cmd_add_project(&mgr, path, name),
