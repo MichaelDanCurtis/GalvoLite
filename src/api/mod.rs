@@ -3,10 +3,12 @@
 //! Builds a Router that the CLI `serve` command and the Tauri binary both use.
 //! All business logic is delegated to SessionManager.
 
+pub mod auth;
 pub mod events;
 pub mod hook_handlers;
 pub mod hooks;
 pub mod operator;
+pub mod spawn;
 
 use crate::session_manager::SessionManager;
 use axum::extract::{Path, State};
@@ -30,6 +32,7 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route("/api/sessions/:id/send", post(send_to_session))
         .route("/api/sessions/:id/autopilot", put(set_autopilot))
         .route("/api/sessions/:id/events", get(get_events))
+        .route("/api/sessions/:id/pending-rejoin", get(spawn::get_pending_rejoin))
         .route("/api/sessions/:id/plan_steps", get(get_plan_steps))
         .route("/api/sessions/:id/terminal", get(terminal_ws))
         .route("/api/fs/list", get(list_directory))
