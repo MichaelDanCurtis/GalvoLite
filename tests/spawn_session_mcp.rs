@@ -184,3 +184,57 @@ async fn status_report_complete_triggers_on_child_terminal_via_state() {
     ).unwrap();
     assert!(pending.as_deref().unwrap_or("").contains("Children resolved"));
 }
+
+#[tokio::test]
+async fn mcp_spawn_session_returns_child_descriptor() {
+    let app = common::test_app_with_bus();
+    let proj_dir = TempDir::new().unwrap();
+    init_git(proj_dir.path());
+    let proj = app.mgr.add_project(NewProject{
+        name:"p".into(), path: proj_dir.path().to_string_lossy().into_owned(), remote_url: None
+    }).unwrap();
+    let parent = app.mgr.spawn_session(
+        proj.id, "p".into(), "implementation".into(), "/bin/cat".into(), vec![]
+    ).await.unwrap();
+    let token = app.db.pool().get().unwrap().query_row(
+        "SELECT api_token FROM sessions WHERE id = ?1",
+        [parent.id.to_string()],
+        |r| r.get::<_, String>(0),
+    ).unwrap();
+
+    let body = serde_json::json!({
+        "jsonrpc":"2.0","id":1,"method":"tools/call",
+        "params":{"name":"spawn_session","arguments":{"role":"implementation","task":"refactor auth"}}
+    });
+    let resp = common::rpc(app.app.clone(), &token, body).await;
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let inner: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert!(inner["session_id"].as_str().is_some());
+    assert!(inner["worktree_path"].as_str().unwrap().contains(".galvolite/worktrees"));
+    assert!(inner["branch"].as_str().unwrap().starts_with("galvolite/"));
+}
+
+#[tokio::test]
+async fn mcp_spawn_session_rejects_unknown_role() {
+    let app = common::test_app_with_bus();
+    let proj_dir = TempDir::new().unwrap();
+    init_git(proj_dir.path());
+    let proj = app.mgr.add_project(NewProject{
+        name:"p".into(), path: proj_dir.path().to_string_lossy().into_owned(), remote_url: None
+    }).unwrap();
+    let parent = app.mgr.spawn_session(
+        proj.id, "p".into(), "implementation".into(), "/bin/cat".into(), vec![]
+    ).await.unwrap();
+    let token = app.db.pool().get().unwrap().query_row(
+        "SELECT api_token FROM sessions WHERE id = ?1",
+        [parent.id.to_string()],
+        |r| r.get::<_, String>(0),
+    ).unwrap();
+
+    let body = serde_json::json!({
+        "jsonrpc":"2.0","id":1,"method":"tools/call",
+        "params":{"name":"spawn_session","arguments":{"role":"president","task":"x"}}
+    });
+    let resp = common::rpc(app.app, &token, body).await;
+    assert!(resp["result"]["isError"].as_bool().unwrap_or(false));
+}
