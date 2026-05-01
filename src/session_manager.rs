@@ -874,17 +874,24 @@ impl SessionManager {
 
                 if arr.is_empty() {
                     // All children resolved — clear waiting_on, populate pending_rejoin.
-                    // Capture the child set BEFORE clearing for the markdown query.
-                    let original: Vec<Uuid> = serde_json::from_str::<Vec<String>>(&waiting_json)
-                        .unwrap_or_default()
-                        .into_iter()
+                    // Query ALL children of this parent (not just those still in
+                    // waiting_on) so earlier children removed from the array in
+                    // prior on_child_terminal calls are still included in the
+                    // rejoin markdown.
+                    let mut child_stmt = tx.prepare(
+                        "SELECT id FROM sessions WHERE parent_session_id = ?1"
+                    )?;
+                    let all_children: Vec<Uuid> = child_stmt
+                        .query_map([&parent_id_str], |r| r.get::<_, String>(0))?
+                        .filter_map(|r| r.ok())
                         .filter_map(|s| Uuid::parse_str(&s).ok())
                         .collect();
+                    drop(child_stmt);
                     tx.execute(
                         "UPDATE sessions SET waiting_on = NULL WHERE id = ?1",
                         [parent_id_str],
                     )?;
-                    newly_resolved.push((parent_id, original));
+                    newly_resolved.push((parent_id, all_children));
                 } else {
                     tx.execute(
                         "UPDATE sessions SET waiting_on = ?1 WHERE id = ?2",
