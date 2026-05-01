@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Plus, PlayCircle } from "lucide-react";
 import { useProjects } from "../hooks/useProjects";
 import { useSessions } from "../hooks/useSessions";
@@ -13,7 +13,7 @@ import { StartSessionModal } from "./modals/StartSessionModal";
 import { SendModal } from "./modals/SendModal";
 import { HandoffModal } from "./modals/HandoffModal";
 import { EndSessionModal } from "./modals/EndSessionModal";
-import type { Project, DomainEvent } from "../types";
+import type { Project, DomainEvent, Session } from "../types";
 
 function SessionEventBridge({
   sessionId,
@@ -71,6 +71,26 @@ export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
     (s) => s.state === "needs_attention"
   ).length;
 
+  const tree = useMemo(() => {
+    const byParent = new Map<string | null, Session[]>();
+    for (const s of filtered) {
+      const k = s.parent_session_id ?? null;
+      const list = byParent.get(k) ?? [];
+      list.push(s);
+      byParent.set(k, list);
+    }
+    const out: Array<{ s: Session; depth: number }> = [];
+    const walk = (parentKey: string | null, depth: number) => {
+      const kids = byParent.get(parentKey) ?? [];
+      for (const k of kids) {
+        out.push({ s: k, depth });
+        walk(k.id, depth + 1);
+      }
+    };
+    walk(null, 0);
+    return out;
+  }, [filtered]);
+
   return (
     <div className="flex flex-col h-screen">
       <header className="flex items-center justify-between px-4 py-3 border-b border-gray-800 bg-gray-900">
@@ -118,10 +138,11 @@ export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
               No sessions. Click <strong>Start Session</strong> to begin.
             </div>
           ) : (
-            filtered.map((s) => (
+            tree.map(({ s, depth }) => (
               <SessionRow
                 key={s.id}
                 session={s}
+                depth={depth}
                 onExpand={(sess) => expand(sess.id)}
                 onRefresh={refresh}
               />
