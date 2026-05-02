@@ -108,6 +108,29 @@ export interface ChildResolution {
   handoff: string | null;
 }
 
+export type Autonomy = "full" | "review" | "manual";
+
+export interface Phase {
+  id: string;
+  parts: number[];
+  autonomy: Autonomy;
+  depends_on: string[];
+}
+
+export interface EscalationRule {
+  trigger: string;
+  action: string;
+}
+
+export interface Directive {
+  name: string;
+  plan_path: string;
+  phases: Phase[];
+  escalation_rules: EscalationRule[];
+  notes: string;
+  raw_markdown: string;
+}
+
 export type DomainEvent =
   | { type: "session.state_changed"; session_id: string; prev: SessionState | null; next: SessionState; last_event_ts: string }
   | { type: "session.event_appended"; session_id: string; event_id: number; kind: string; source: string; ts: string; payload: unknown }
@@ -122,4 +145,5 @@ export type DomainEvent =
       type: "session.children_resolved";
       session_id: string;
       children: ChildResolution[];
-    };
+    }
+  | { type: "directive.changed"; project_id: string };

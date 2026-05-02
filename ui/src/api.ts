@@ -8,6 +8,7 @@ import type {
   CreateSessionReq,
   SendReq,
   DirectoryListing,
+  Directive,
 } from "./types";
 
 const BASE = "";
@@ -98,6 +99,37 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ answer }),
     }),
+
+  /**
+   * Fetch the directive for a project. Returns `null` when no directive
+   * has been written yet (server returns 404). Any other non-2xx is thrown.
+   */
+  getDirective: async (projectId: string): Promise<Directive | null> => {
+    const resp = await fetch(`/api/projects/${projectId}/directive`);
+    if (resp.status === 404) return null;
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`${resp.status}: ${text}`);
+    }
+    return resp.json() as Promise<Directive>;
+  },
+
+  /**
+   * Write the directive markdown for a project. The server parses + atomically
+   * writes; on parse failure the server returns 400 with the parse error in the
+   * body, which we surface as the thrown Error message.
+   */
+  putDirective: async (projectId: string, markdown: string): Promise<void> => {
+    const resp = await fetch(`/api/projects/${projectId}/directive`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ markdown }),
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`${resp.status}: ${text}`);
+    }
+  },
 
   terminalWsUrl: (id: string): string => {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
