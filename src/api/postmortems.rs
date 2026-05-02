@@ -1,4 +1,5 @@
-//! GET `/api/projects/:id/postmortems?part=N` — list postmortems for a part.
+//! GET `/api/projects/:id/postmortems?part=N` — list postmortems for a part,
+//! or all postmortems when `part` is omitted.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -15,7 +16,7 @@ type AppState = Arc<SessionManager>;
 
 #[derive(Deserialize)]
 pub struct Q {
-    pub part: u32,
+    pub part: Option<u32>,
 }
 
 pub async fn list(
@@ -27,12 +28,17 @@ pub async fn list(
         Ok(p) => p,
         Err(e) => return crate::api::err_to_response(e),
     };
-    match postmortem::list_for_part(std::path::Path::new(&project.path), q.part) {
+    let project_path = std::path::Path::new(&project.path);
+    let result = match q.part {
+        Some(part) => postmortem::list_for_part(project_path, part),
+        None => postmortem::list_all(project_path),
+    };
+    match result {
         Ok(list) => Json(list).into_response(),
         Err(e) => {
             tracing::error!(
                 project_id = %project_id,
-                part = q.part,
+                part = ?q.part,
                 error = %e,
                 "list postmortems failed"
             );

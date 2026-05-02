@@ -9,6 +9,8 @@ import type {
   SendReq,
   DirectoryListing,
   Directive,
+  Postmortem,
+  Decision,
 } from "./types";
 
 const BASE = "";
@@ -150,6 +152,24 @@ export const api = {
       const text = await resp.text();
       throw new Error(`${resp.status}: ${text}`);
     }
+  },
+
+  listPostmortems: async (projectId: string): Promise<Postmortem[]> => {
+    const resp = await fetch(`/api/projects/${projectId}/postmortems`);
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`${resp.status}: ${text}`);
+    }
+    return resp.json() as Promise<Postmortem[]>;
+  },
+
+  listDecisions: async (projectId: string): Promise<Decision[]> => {
+    const resp = await fetch(`/api/projects/${projectId}/decisions`);
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`${resp.status}: ${text}`);
+    }
+    return resp.json() as Promise<Decision[]>;
   },
 
   terminalWsUrl: (id: string): string => {

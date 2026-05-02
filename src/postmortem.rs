@@ -111,6 +111,35 @@ pub fn list_for_part(project_path: &Path, part: u32) -> std::io::Result<Vec<Post
     Ok(out)
 }
 
+/// Parse every postmortem under `.galvolite/postmortems/`. Skips malformed
+/// files with a tracing::warn — same best-effort policy as `list_for_part`.
+pub fn list_all(project_path: &Path) -> std::io::Result<Vec<Postmortem>> {
+    let dir = postmortems_dir(project_path);
+    if !dir.exists() { return Ok(vec![]); }
+    let mut out = vec![];
+    for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("md") { continue; }
+        match std::fs::read_to_string(&path) {
+            Ok(s) => match parse(&s) {
+                Some(pm) => out.push(pm),
+                None => tracing::warn!(
+                    path = %path.display(),
+                    "postmortem parse failed; skipping"
+                ),
+            },
+            Err(e) => tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "postmortem read failed; skipping"
+            ),
+        }
+    }
+    out.sort_by(|a, b| b.written_at.cmp(&a.written_at));
+    Ok(out)
+}
+
 /// Parse a postmortem from on-disk markdown. Returns `None` on any malformed
 /// frontmatter — listing is best-effort and a corrupt file should not poison
 /// the whole listing. Format produced by [`Postmortem::render`].

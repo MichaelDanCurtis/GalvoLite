@@ -14,6 +14,7 @@ import { StartSessionModal } from "./modals/StartSessionModal";
 import { SendModal } from "./modals/SendModal";
 import { HandoffModal } from "./modals/HandoffModal";
 import { EndSessionModal } from "./modals/EndSessionModal";
+import { PostmortemsPanel } from "./PostmortemsPanel";
 import type { Project, DomainEvent, Session } from "../types";
 
 function SessionEventBridge({
@@ -156,6 +157,11 @@ export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
             ))
           )}
         </div>
+        {selectedProject && (
+          <aside className="w-64 shrink-0 border-l border-neutral-800 overflow-auto bg-neutral-950">
+            <PostmortemsPanel projectId={selectedProject} />
+          </aside>
+        )}
       </div>
 
       <AddProjectModal

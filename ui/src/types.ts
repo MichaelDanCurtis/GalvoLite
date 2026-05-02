@@ -131,6 +131,28 @@ export interface Directive {
   raw_markdown: string;
 }
 
+export type PostmortemOutcome = "shipped" | "stuck" | "escalated";
+
+export interface Postmortem {
+  plan_part: number;
+  session_id: string;
+  outcome: PostmortemOutcome;
+  cycles: number;
+  duration_seconds: number;
+  written_at: string; // ISO 8601
+  what_worked: string;
+  gotchas: string;
+  follow_ups: string;
+}
+
+export interface Decision {
+  session_id: string;
+  asked_at: string; // ISO 8601
+  question: string;
+  answer: string;
+  choices: string[] | null;
+}
+
 export type DomainEvent =
   | { type: "session.state_changed"; session_id: string; prev: SessionState | null; next: SessionState; last_event_ts: string }
   | { type: "session.event_appended"; session_id: string; event_id: number; kind: string; source: string; ts: string; payload: unknown }

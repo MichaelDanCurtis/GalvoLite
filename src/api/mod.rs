@@ -7,6 +7,7 @@ pub mod auth;
 pub mod events;
 pub mod hook_handlers;
 pub mod hooks;
+pub mod decisions;
 pub mod directive;
 pub mod operator;
 pub mod plan;
@@ -49,6 +50,7 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
             "/api/projects/:id/postmortems",
             get(postmortems::list),
         )
+        .route("/api/projects/:id/decisions", get(decisions::list))
         .route("/api/operator/prompt/:id/answer", post(operator::answer))
         .route("/mcp", post(crate::mcp::transport::handle))
         .layer(CorsLayer::permissive())
