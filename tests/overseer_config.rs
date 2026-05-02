@@ -5,7 +5,7 @@ static MUTEX: Mutex<()> = Mutex::new(());
 
 #[test]
 fn defaults_off_when_env_unset() {
-    let _lock = MUTEX.lock();
+    let _lock = MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     std::env::remove_var("GALVOLITE_OVERSEER");
     std::env::remove_var("GALVOLITE_PLAN_EXECUTOR");
     assert!(!overseer_enabled());
@@ -14,7 +14,7 @@ fn defaults_off_when_env_unset() {
 
 #[test]
 fn enabled_when_env_set_truthy() {
-    let _lock = MUTEX.lock();
+    let _lock = MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("GALVOLITE_OVERSEER", "1");
     std::env::set_var("GALVOLITE_PLAN_EXECUTOR", "true");
     assert!(overseer_enabled());
@@ -25,7 +25,7 @@ fn enabled_when_env_set_truthy() {
 
 #[test]
 fn config_from_env_returns_none_when_key_missing() {
-    let _lock = MUTEX.lock();
+    let _lock = MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     std::env::remove_var("KIMI_API_KEY");
     std::env::remove_var("KIMI_BASE_URL");
     assert!(OverseerConfig::from_env().is_none());
@@ -33,7 +33,7 @@ fn config_from_env_returns_none_when_key_missing() {
 
 #[test]
 fn config_from_env_uses_default_base_url_when_only_key_set() {
-    let _lock = MUTEX.lock();
+    let _lock = MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("KIMI_API_KEY", "k");
     std::env::remove_var("KIMI_BASE_URL");
     let c = OverseerConfig::from_env().unwrap();
