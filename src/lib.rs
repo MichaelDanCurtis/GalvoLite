@@ -15,6 +15,7 @@ pub mod error;
 pub mod handoff;
 pub mod hooks;
 pub mod mcp;
+pub mod overseer;
 pub mod pty;
 pub mod ritual;
 pub mod session_manager;
