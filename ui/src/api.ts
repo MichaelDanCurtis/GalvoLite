@@ -101,6 +101,20 @@ export const api = {
     }),
 
   /**
+   * Fetch the plan.md markdown for a project. Returns `null` when no plan.md
+   * has been written yet (server returns 404). Any other non-2xx is thrown.
+   */
+  getPlan: async (projectId: string): Promise<{ markdown: string } | null> => {
+    const resp = await fetch(`/api/projects/${projectId}/plan`);
+    if (resp.status === 404) return null;
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`${resp.status}: ${text}`);
+    }
+    return resp.json() as Promise<{ markdown: string }>;
+  },
+
+  /**
    * Fetch the directive for a project. Returns `null` when no directive
    * has been written yet (server returns 404). Any other non-2xx is thrown.
    *

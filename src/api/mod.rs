@@ -9,6 +9,7 @@ pub mod hook_handlers;
 pub mod hooks;
 pub mod directive;
 pub mod operator;
+pub mod plan;
 pub mod postmortems;
 pub mod spawn;
 
@@ -43,6 +44,7 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
             "/api/projects/:id/directive",
             get(directive::get_directive).put(directive::put_directive),
         )
+        .route("/api/projects/:id/plan", get(plan::get_plan))
         .route(
             "/api/projects/:id/postmortems",
             get(postmortems::list),

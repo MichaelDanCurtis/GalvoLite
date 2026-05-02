@@ -9,6 +9,7 @@ import { SessionRow } from "./SessionRow";
 import { ExpandedSessionView } from "./ExpandedSessionView";
 import { AddProjectModal } from "./modals/AddProjectModal";
 import { RemoveProjectModal } from "./modals/RemoveProjectModal";
+import { SpawnControls } from "./SpawnControls";
 import { StartSessionModal } from "./modals/StartSessionModal";
 import { SendModal } from "./modals/SendModal";
 import { HandoffModal } from "./modals/HandoffModal";
@@ -117,6 +118,12 @@ export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
             >
               <PlayCircle size={12} /> Start Session
             </button>
+          )}
+          {selectedProject && (
+            <SpawnControls
+              projectId={selectedProject}
+              onSpawn={() => setStartOpen(true)}
+            />
           )}
         </div>
         <div className="flex items-center gap-4 text-sm">
