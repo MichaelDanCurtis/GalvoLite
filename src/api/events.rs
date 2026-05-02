@@ -81,6 +81,10 @@ pub enum DomainEvent {
         session_id: Uuid,
         path: String,
     },
+    #[serde(rename = "phase.review_needed")]
+    PhaseReviewNeeded { project_id: Uuid, phase_id: String },
+    #[serde(rename = "phase.advanced")]
+    PhaseAdvanced { project_id: Uuid, phase_id: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -133,7 +137,9 @@ impl DomainEvent {
             | DomainEvent::SessionChildrenResolved { session_id, .. } => *session_id == sid,
             DomainEvent::DirectiveChanged { .. }
             | DomainEvent::PostmortemWritten { .. }
-            | DomainEvent::DecisionRecorded { .. } => false,
+            | DomainEvent::DecisionRecorded { .. }
+            | DomainEvent::PhaseReviewNeeded { .. }
+            | DomainEvent::PhaseAdvanced { .. } => false,
         }
     }
 }

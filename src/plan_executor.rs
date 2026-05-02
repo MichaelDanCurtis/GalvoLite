@@ -70,6 +70,109 @@ pub fn derive_spawn_graph(plan_md: &str, directive_md: &str) -> Result<SpawnGrap
     Ok(SpawnGraph { phases })
 }
 
+// ─── execute_plan driver ───────────────────────────────────────────────────
+
+use crate::api::events::{DomainEvent, EventBroadcaster};
+use crate::db::Db;
+use crate::session_manager::SessionManager;
+use std::sync::Arc;
+use uuid::Uuid;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ExecuteError {
+    #[error("missing artifact: {0}")]
+    MissingArtifact(&'static str),
+    #[error("derive: {0}")]
+    Derive(#[from] DeriveError),
+    #[error("no orchestrator session for project {0}")]
+    NoOrchestrator(Uuid),
+    #[error("orchestrator already has running children — refusing to re-execute")]
+    AlreadyRunning,
+    #[error("spawn failed: {0}")]
+    Spawn(#[from] crate::error::Error),
+}
+
+pub async fn execute_plan(
+    mgr: Arc<SessionManager>,
+    project_id: Uuid,
+) -> Result<Vec<Uuid>, ExecuteError> {
+    let project = mgr.db().get_project(project_id)?;
+    let proj_path = std::path::Path::new(&project.path);
+    let plan = std::fs::read_to_string(proj_path.join(".galvolite/plan.md"))
+        .map_err(|_| ExecuteError::MissingArtifact("plan.md"))?;
+    let directive = std::fs::read_to_string(proj_path.join(".galvolite/directive.md"))
+        .map_err(|_| ExecuteError::MissingArtifact("directive.md"))?;
+
+    let graph = derive_spawn_graph(&plan, &directive)?;
+
+    let orch = mgr.find_orchestrator_for_project(project_id)
+        .ok_or(ExecuteError::NoOrchestrator(project_id))?;
+
+    // Idempotency: refuse if any non-terminal child already exists for this orch.
+    let has_running = mgr.db().list_sessions()?.iter()
+        .any(|s| s.parent_session_id == Some(orch.id) && s.ended_at.is_none());
+    if has_running { return Err(ExecuteError::AlreadyRunning); }
+
+    let bus = mgr.event_bus().clone();
+    let mut spawned: Vec<Uuid> = Vec::new();
+
+    // Spawn ONLY the first phase synchronously here; subsequent phases are
+    // advanced by the phase reactor (Task 6) on rejoin or operator approval.
+    if let Some(first) = graph.phases.first() {
+        let kids = spawn_phase(&mgr, &orch, first, &bus, project_id).await?;
+        spawned.extend(kids.iter().copied());
+        mgr.set_waiting_on(orch.id, &kids).await?;
+        store_pending_phases(mgr.db(), orch.id, &graph.phases[1..])?;
+        if matches!(first.autonomy, Autonomy::Review | Autonomy::Manual) {
+            bus.publish(DomainEvent::PhaseReviewNeeded {
+                project_id, phase_id: first.id.clone(),
+            });
+        }
+    }
+    Ok(spawned)
+}
+
+async fn spawn_phase(
+    mgr: &Arc<SessionManager>,
+    orch: &crate::db::Session,
+    phase: &PhasePlan,
+    bus: &EventBroadcaster,
+    project_id: Uuid,
+) -> Result<Vec<Uuid>, crate::error::Error> {
+    let mut kids = Vec::new();
+    for (part, title) in &phase.part_titles {
+        let s = mgr.spawn_child(orch.id, "implementation", title, Some(*part)).await?;
+        kids.push(s.id);
+    }
+    bus.publish(DomainEvent::PhaseAdvanced { project_id, phase_id: phase.id.clone() });
+    Ok(kids)
+}
+
+/// Persist remaining phases as JSON in the sessions table for the phase reactor.
+fn store_pending_phases(
+    db: &Db,
+    orch_id: Uuid,
+    remaining: &[PhasePlan],
+) -> Result<(), crate::error::Error> {
+    let serializable: Vec<_> = remaining.iter().map(|p| serde_json::json!({
+        "id": p.id,
+        "autonomy": match p.autonomy {
+            Autonomy::Full => "full",
+            Autonomy::Review => "review",
+            Autonomy::Manual => "manual",
+        },
+        "depends_on": p.depends_on,
+        "part_titles": p.part_titles,
+    })).collect();
+    let json = serde_json::to_string(&serializable).unwrap();
+    let conn = db.pool().get()?;
+    conn.execute(
+        "UPDATE sessions SET pending_phases_json = ?1 WHERE id = ?2",
+        rusqlite::params![json, orch_id.to_string()],
+    )?;
+    Ok(())
+}
+
 fn topo_sort(phases: &[directive::Phase]) -> Vec<&directive::Phase> {
     use std::collections::{HashMap, HashSet};
     let by_id: HashMap<&str, &directive::Phase> =

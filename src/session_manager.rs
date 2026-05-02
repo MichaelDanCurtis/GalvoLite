@@ -1055,6 +1055,14 @@ impl SessionManager {
     ///
     /// Idempotent: replays `on_child_terminal` for already-terminal children;
     /// `on_child_terminal` is itself idempotent so repeat calls are safe.
+    /// Find the most recent non-terminal orchestrator session for a project.
+    /// Returns `None` if no orchestrator is currently running.
+    pub fn find_orchestrator_for_project(&self, project_id: Uuid) -> Option<crate::db::Session> {
+        self.db.list_sessions().ok()?.into_iter()
+            .filter(|s| s.project_id == project_id && s.role == "orchestrator" && s.ended_at.is_none())
+            .max_by_key(|s| s.created_at)
+    }
+
     pub async fn recover_pending_rejoins(&self) -> Result<()> {
         let parents: Vec<(String, String)> = {
             let conn = self.db.pool().get()?;

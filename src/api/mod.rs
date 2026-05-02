@@ -5,6 +5,7 @@
 
 pub mod auth;
 pub mod events;
+pub mod execute_plan;
 pub mod hook_handlers;
 pub mod hooks;
 pub mod decisions;
@@ -50,6 +51,7 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
             "/api/projects/:id/postmortems",
             get(postmortems::list),
         )
+        .route("/api/projects/:id/execute-plan", post(execute_plan::handler))
         .route("/api/projects/:id/decisions", get(decisions::list))
         .route("/api/operator/prompt/:id/answer", post(operator::answer))
         .route("/mcp", post(crate::mcp::transport::handle))

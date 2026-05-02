@@ -14,6 +14,7 @@ const SCHEMA_V1: &str = include_str!("../migrations/0001_initial.sql");
 const SCHEMA_V2: &str = include_str!("../migrations/0002_hooks_mcp_foundations.sql");
 const SCHEMA_V3: &str = include_str!("../migrations/0003_session_spawn.sql");
 const SCHEMA_V4: &str = include_str!("../migrations/0004_overseer_executor.sql");
+const SCHEMA_V5: &str = include_str!("../migrations/0005_pending_phases.sql");
 
 /// (version, sql_body). Order matters: applied lowest-to-highest. Each entry
 /// is applied iff the version is not present in `schema_version`.
@@ -22,6 +23,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (2, SCHEMA_V2),
     (3, SCHEMA_V3),
     (4, SCHEMA_V4),
+    (5, SCHEMA_V5),
 ];
 
 #[derive(Clone)]
@@ -163,6 +165,8 @@ pub struct Session {
     pub terminal_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_overseer_recs: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_phases_json: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -324,6 +328,7 @@ impl Db {
             pending_rejoin: None,
             terminal_status: None,
             pending_overseer_recs: None,
+            pending_phases_json: None,
         })
     }
 
@@ -332,7 +337,8 @@ impl Db {
         conn.query_row(
             "SELECT id, project_id, role, branch, worktree_path, pty_pid, state,
                     autopilot, parent_session_id, task_summary, created_at, ended_at,
-                    waiting_on, pending_rejoin, terminal_status, pending_overseer_recs
+                    waiting_on, pending_rejoin, terminal_status, pending_overseer_recs,
+                    pending_phases_json
              FROM sessions WHERE id = ?1",
             params![id.to_string()],
             |r| {
@@ -370,6 +376,7 @@ impl Db {
                     pending_rejoin: r.get(13)?,
                     terminal_status: r.get(14)?,
                     pending_overseer_recs: r.get(15)?,
+                    pending_phases_json: r.get(16)?,
                 })
             },
         )
@@ -384,7 +391,8 @@ impl Db {
         let mut stmt = conn.prepare(
             "SELECT id, project_id, role, branch, worktree_path, pty_pid, state,
                     autopilot, parent_session_id, task_summary, created_at, ended_at,
-                    waiting_on, pending_rejoin, terminal_status, pending_overseer_recs
+                    waiting_on, pending_rejoin, terminal_status, pending_overseer_recs,
+                    pending_phases_json
              FROM sessions WHERE ended_at IS NULL ORDER BY created_at ASC",
         )?;
         let rows = stmt
@@ -426,6 +434,7 @@ impl Db {
                     pending_rejoin: r.get(13)?,
                     terminal_status: r.get(14)?,
                     pending_overseer_recs: r.get(15)?,
+                    pending_phases_json: r.get(16)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
