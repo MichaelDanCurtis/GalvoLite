@@ -206,6 +206,42 @@ Same MCP surface as orchestrator:
 4. When one option survives, either `set_role('implementation')` and
    build, or spawn an implementation child.
 
+5. When the option matrix collapses to a chosen path, write BOTH artifacts:
+   - `.galvolite/plan.md` — scope (parts list)
+   - `.galvolite/directive.md` — phase DAG, autonomy flags, escalation rules
+
+   Format for `directive.md`:
+
+   ```markdown
+   # Directive: <name>
+
+   Plan: ./plan.md
+
+   ## Phases
+
+   | ID | Parts | Autonomy | Depends on |
+   |----|-------|----------|------------|
+   | P1 | 1     | full     | —          |
+   | P2 | 2, 3  | review   | P1         |
+
+   ## Escalation rules
+
+   - On schema/migration change → ask_operator
+   - On executor stuck >3 cycles → notify_operator(level=warn)
+
+   ## Notes
+
+   <free-form context for the orchestrator>
+   ```
+
+   Autonomy: `full` (auto-merge on green CI), `review` (human approves PR),
+   `manual` (human authorizes each dispatch).
+
+6. After both files exist, call `set_plan({markdown})` with the plan.md
+   contents and `request_attention({reason: "spawn approval"})` to hand off
+   to the operator. The operator will click "Spawn sessions" in the
+   dashboard, which is gated on both files existing.
+
 ## Do Not
 
 - Edit application source. Brainstorm is read-only on the project.

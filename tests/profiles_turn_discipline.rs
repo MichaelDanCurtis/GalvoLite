@@ -7,7 +7,7 @@
 //! (Sub-plan 7 Tasks 8 and 9 respectively) so each task's red-then-green
 //! cycle stays self-contained.
 
-use galvolite::claude_md::{fix_profile, implementation_profile, orchestrator_profile};
+use galvolite::claude_md::{brainstorm_profile, fix_profile, implementation_profile, orchestrator_profile};
 
 #[test]
 fn impl_profile_requires_turn_discipline() {
@@ -85,5 +85,50 @@ fn orch_profile_forbids_decisions() {
     assert!(
         p.contains("Never prose-only"),
         "ORCH_PROFILE missing 'Never prose-only' turn-discipline closer"
+    );
+}
+
+#[test]
+fn brainstorm_profile_emits_directive() {
+    let p = brainstorm_profile();
+    assert!(
+        p.contains(".galvolite/plan.md"),
+        "BRAINSTORM_PROFILE missing '.galvolite/plan.md' artifact reference"
+    );
+    assert!(
+        p.contains(".galvolite/directive.md"),
+        "BRAINSTORM_PROFILE missing '.galvolite/directive.md' artifact reference"
+    );
+    assert!(
+        p.contains("# Directive: <name>"),
+        "BRAINSTORM_PROFILE missing '# Directive: <name>' header template"
+    );
+    assert!(
+        p.contains("## Phases"),
+        "BRAINSTORM_PROFILE missing '## Phases' section in directive template"
+    );
+    assert!(
+        p.contains("## Escalation rules"),
+        "BRAINSTORM_PROFILE missing '## Escalation rules' section in directive template"
+    );
+    assert!(
+        p.contains("## Notes"),
+        "BRAINSTORM_PROFILE missing '## Notes' section in directive template"
+    );
+    assert!(
+        p.contains("Autonomy:"),
+        "BRAINSTORM_PROFILE missing 'Autonomy:' legend line"
+    );
+    assert!(
+        p.contains("set_plan"),
+        "BRAINSTORM_PROFILE missing 'set_plan' call-out"
+    );
+    assert!(
+        p.contains("spawn approval"),
+        "BRAINSTORM_PROFILE missing 'spawn approval' request_attention reason"
+    );
+    assert!(
+        p.contains("Spawn sessions"),
+        "BRAINSTORM_PROFILE missing 'Spawn sessions' dashboard button reference"
     );
 }
