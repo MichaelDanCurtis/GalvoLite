@@ -8,6 +8,7 @@ pub mod auth;
 pub mod claude_md;
 pub mod cli;
 pub mod db;
+pub mod directive;
 pub mod error;
 pub mod handoff;
 pub mod hooks;
