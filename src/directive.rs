@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Directive {
     pub name: String,
     pub plan_path: PathBuf,
@@ -18,7 +18,7 @@ pub struct Directive {
     pub raw_markdown: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Phase {
     pub id: String,
     pub parts: Vec<u32>,
@@ -26,7 +26,7 @@ pub struct Phase {
     pub depends_on: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Autonomy {
     Full,
@@ -34,7 +34,7 @@ pub enum Autonomy {
     Manual,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EscalationRule {
     pub trigger: String,
     pub action: String,
@@ -84,7 +84,11 @@ pub fn parse(s: &str) -> Result<Directive, ParseError> {
 fn extract_title(s: &str) -> Result<String, ParseError> {
     for line in s.lines() {
         if let Some(rest) = line.strip_prefix("# Directive:") {
-            return Ok(rest.trim().to_string());
+            let name = rest.trim();
+            if name.is_empty() {
+                return Err(ParseError::MissingSection("# Directive: <name>"));
+            }
+            return Ok(name.to_string());
         }
     }
     Err(ParseError::MissingSection("# Directive: <name>"))
@@ -159,6 +163,10 @@ fn parse_phases(s: &str) -> Result<Vec<Phase>, ParseError> {
         let depends_on = parse_depends_on(cells[3]);
 
         phases.push(Phase { id, parts, autonomy, depends_on });
+    }
+
+    if phases.is_empty() {
+        return Err(ParseError::MissingSection("## Phases (no data rows)"));
     }
 
     Ok(phases)

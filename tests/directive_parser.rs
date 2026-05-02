@@ -1,4 +1,4 @@
-use galvolite::directive::{parse, Autonomy};
+use galvolite::directive::{parse, Autonomy, ParseError};
 
 const SAMPLE: &str = r#"# Directive: Sub-plan 7
 
@@ -50,17 +50,29 @@ fn parses_full_directive() {
 #[test]
 fn rejects_circular_dependencies() {
     let bad = "# Directive: D\n\nPlan: p\n\n## Phases\n\n| ID | Parts | Autonomy | Depends on |\n|----|-------|----------|------------|\n| P1 | 1     | full     | P2         |\n| P2 | 2     | full     | P1         |\n";
-    assert!(parse(bad).is_err());
+    assert!(matches!(parse(bad), Err(ParseError::CircularDep(_))));
 }
 
 #[test]
 fn rejects_unknown_autonomy() {
     let bad = SAMPLE.replace("full", "yolo");
-    assert!(parse(&bad).is_err());
+    assert!(matches!(parse(&bad), Err(ParseError::BadAutonomy(_))));
 }
 
 #[test]
 fn rejects_dependency_on_undefined_phase() {
     let bad = SAMPLE.replace("P1, P2", "P1, P9");
-    assert!(parse(&bad).is_err());
+    assert!(matches!(parse(&bad), Err(ParseError::UndefinedDep { .. })));
+}
+
+#[test]
+fn rejects_empty_title() {
+    let bad = SAMPLE.replace("Sub-plan 7", "");
+    assert!(matches!(parse(&bad), Err(ParseError::MissingSection(_))));
+}
+
+#[test]
+fn rejects_empty_phases_table() {
+    let bad = "# Directive: D\n\nPlan: ./p\n\n## Phases\n\n| ID | Parts | Autonomy | Depends on |\n|----|-------|----------|------------|\n\n## Notes\n\n";
+    assert!(matches!(parse(bad), Err(ParseError::MissingSection(_))));
 }
