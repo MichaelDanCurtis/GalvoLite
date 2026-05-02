@@ -4,7 +4,6 @@ mod common;
 use galvolite::db::NewProject;
 use std::process::Command;
 use tempfile::TempDir;
-use uuid::Uuid;
 
 fn init_git(d: &std::path::Path) {
     Command::new("git")
@@ -46,28 +45,9 @@ Plan: .galvolite/plan.md
 ## Notes
 ";
 
-/// Insert an orchestrator session directly, bypassing the role CHECK constraint.
-fn insert_orchestrator(db: &galvolite::db::Db, project_id: Uuid, worktree_path: &str) -> Uuid {
-    let id = Uuid::new_v4();
-    let now = chrono::Utc::now().to_rfc3339();
-    let conn = db.pool().get().unwrap();
-    conn.execute(
-        "INSERT INTO sessions (id, project_id, role, branch, worktree_path, state, autopilot, task_summary, created_at)
-         VALUES (?1, ?2, 'implementation', NULL, ?3, 'idle', 0, 'orchestrator task', ?4)",
-        rusqlite::params![id.to_string(), project_id.to_string(), worktree_path, now],
-    ).unwrap();
-    conn.execute_batch("PRAGMA ignore_check_constraints = ON;").ok();
-    conn.execute(
-        "UPDATE sessions SET role = 'orchestrator' WHERE id = ?1",
-        rusqlite::params![id.to_string()],
-    ).unwrap();
-    conn.execute_batch("PRAGMA ignore_check_constraints = OFF;").ok();
-    id
-}
-
 async fn post_execute(
     app: &common::TestApp,
-    project_id: Uuid,
+    project_id: uuid::Uuid,
 ) -> axum::http::Response<axum::body::Body> {
     use tower::ServiceExt;
     let req = axum::http::Request::builder()
@@ -101,8 +81,17 @@ async fn missing_plan_returns_400() {
         })
         .unwrap();
 
-    // Insert orchestrator so we don't hit NoOrchestrator before MissingArtifact.
-    insert_orchestrator(&app.db, project.id, &dir.path().to_string_lossy());
+    // Spawn a top-level session so we don't hit NoOrchestrator before MissingArtifact.
+    app.mgr
+        .spawn_session(
+            project.id,
+            "root".into(),
+            "implementation".into(),
+            "/bin/cat".into(),
+            vec![],
+        )
+        .await
+        .unwrap();
 
     let resp = post_execute(&app, project.id).await;
     assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
@@ -157,7 +146,17 @@ async fn double_execute_returns_409() {
         })
         .unwrap();
 
-    insert_orchestrator(&app.db, project.id, &dir.path().to_string_lossy());
+    // Spawn a top-level session — satisfies find_orchestrator_for_project heuristic.
+    app.mgr
+        .spawn_session(
+            project.id,
+            "root".into(),
+            "implementation".into(),
+            "/bin/cat".into(),
+            vec![],
+        )
+        .await
+        .unwrap();
 
     // First execute — should succeed (spawns a child via spawn_child + git worktree).
     let resp1 = post_execute(&app, project.id).await;

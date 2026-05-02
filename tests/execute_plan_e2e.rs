@@ -4,7 +4,6 @@ mod common;
 use galvolite::db::NewProject;
 use std::process::Command;
 use tempfile::TempDir;
-use uuid::Uuid;
 
 fn init_git(d: &std::path::Path) {
     Command::new("git")
@@ -46,39 +45,6 @@ Plan: .galvolite/plan.md
 ## Notes
 ";
 
-/// Insert an orchestrator session row directly (bypassing the role CHECK
-/// constraint which only covers implementation/brainstorm/scout/fix).
-fn insert_orchestrator(
-    db: &galvolite::db::Db,
-    project_id: Uuid,
-    worktree_path: &str,
-) -> Uuid {
-    let id = Uuid::new_v4();
-    let now = chrono::Utc::now().to_rfc3339();
-    let conn = db.pool().get().unwrap();
-    // Temporarily disable foreign key enforcement so we can INSERT with the
-    // custom role without hitting the CHECK constraint.
-    // NOTE: The CHECK constraint is on the role column of the sessions table.
-    // SQLite CHECK constraints can't be disabled per-connection without
-    // re-creating the table. Instead, we just insert with a workaround:
-    // we use a raw INSERT that satisfies the constraint by inserting
-    // 'implementation' first, then UPDATE the role to 'orchestrator'.
-    conn.execute(
-        "INSERT INTO sessions (id, project_id, role, branch, worktree_path, state, autopilot, task_summary, created_at)
-         VALUES (?1, ?2, 'implementation', NULL, ?3, 'idle', 0, 'orchestrator task', ?4)",
-        rusqlite::params![id.to_string(), project_id.to_string(), worktree_path, now],
-    ).unwrap();
-    // Now bypass the CHECK by using a raw UPDATE with pragma.
-    // In SQLite, CHECK constraints are NOT enforced on UPDATE in older versions,
-    // but in newer versions they ARE. Instead we need to disable them.
-    conn.execute_batch("PRAGMA ignore_check_constraints = ON;").ok();
-    conn.execute(
-        "UPDATE sessions SET role = 'orchestrator' WHERE id = ?1",
-        rusqlite::params![id.to_string()],
-    ).unwrap();
-    conn.execute_batch("PRAGMA ignore_check_constraints = OFF;").ok();
-    id
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn execute_plan_spawns_one_child_per_part_in_first_phase() {
@@ -104,12 +70,21 @@ async fn execute_plan_spawns_one_child_per_part_in_first_phase() {
         })
         .unwrap();
 
-    // Insert orchestrator session directly (role CHECK constraint workaround).
-    let orch_id = insert_orchestrator(
-        &app.db,
-        project.id,
-        &dir.path().to_string_lossy(),
-    );
+    // Spawn a top-level session (no parent) — this is what find_orchestrator_for_project
+    // now selects. Role must be CHECK-constraint-valid; "orchestrator" is a runtime
+    // profile, not a DB role value.
+    let parent = app
+        .mgr
+        .spawn_session(
+            project.id,
+            "root".into(),
+            "implementation".into(),
+            "/bin/cat".into(),
+            vec![],
+        )
+        .await
+        .unwrap();
+    let orch_id = parent.id;
 
     // POST /api/projects/:id/execute-plan
     let req = axum::http::Request::builder()

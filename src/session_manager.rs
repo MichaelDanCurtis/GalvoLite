@@ -1055,11 +1055,17 @@ impl SessionManager {
     ///
     /// Idempotent: replays `on_child_terminal` for already-terminal children;
     /// `on_child_terminal` is itself idempotent so repeat calls are safe.
-    /// Find the most recent non-terminal orchestrator session for a project.
-    /// Returns `None` if no orchestrator is currently running.
+    /// Find the most recent non-terminal top-level session for a project.
+    /// "Orchestrator" here means a session with no parent — the user-facing
+    /// root that may spawn children. The DB schema does not store
+    /// "orchestrator" as a role (that's a runtime profile signaled via
+    /// `[ROLE:orchestrator]`); the top-level-session heuristic is what
+    /// `execute_plan` needs to attach children to.
     pub fn find_orchestrator_for_project(&self, project_id: Uuid) -> Option<crate::db::Session> {
         self.db.list_sessions().ok()?.into_iter()
-            .filter(|s| s.project_id == project_id && s.role == "orchestrator" && s.ended_at.is_none())
+            .filter(|s| s.project_id == project_id
+                        && s.parent_session_id.is_none()
+                        && s.ended_at.is_none())
             .max_by_key(|s| s.created_at)
     }
 
