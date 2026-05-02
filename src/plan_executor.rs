@@ -72,7 +72,7 @@ pub fn derive_spawn_graph(plan_md: &str, directive_md: &str) -> Result<SpawnGrap
 
 // ─── execute_plan driver ───────────────────────────────────────────────────
 
-use crate::api::events::{DomainEvent, EventBroadcaster};
+use crate::api::events::DomainEvent;
 use crate::db::Db;
 use crate::session_manager::SessionManager;
 use std::sync::Arc;
@@ -109,6 +109,10 @@ pub async fn execute_plan(
         .ok_or(ExecuteError::NoOrchestrator(project_id))?;
 
     // Idempotency: refuse if any non-terminal child already exists for this orch.
+    // Note: `list_sessions()` filters to non-terminal rows — once all children
+    // have ended (terminal_status set), execute-plan can be re-issued to spawn
+    // a fresh wave from the same plan.md / directive.md. Spec §4 Flow A treats
+    // this as a feature: re-running the same plan after completion is supported.
     let has_running = mgr.db().list_sessions()?.iter()
         .any(|s| s.parent_session_id == Some(orch.id) && s.ended_at.is_none());
     if has_running { return Err(ExecuteError::AlreadyRunning); }
@@ -119,10 +123,11 @@ pub async fn execute_plan(
     // Spawn ONLY the first phase synchronously here; subsequent phases are
     // advanced by the phase reactor (Task 6) on rejoin or operator approval.
     if let Some(first) = graph.phases.first() {
-        let kids = spawn_phase(&mgr, &orch, first, &bus, project_id).await?;
+        let kids = spawn_phase(&mgr, &orch, first).await?;
         spawned.extend(kids.iter().copied());
         mgr.set_waiting_on(orch.id, &kids).await?;
         store_pending_phases(mgr.db(), orch.id, &graph.phases[1..])?;
+        bus.publish(DomainEvent::PhaseAdvanced { project_id, phase_id: first.id.clone() });
         if matches!(first.autonomy, Autonomy::Review | Autonomy::Manual) {
             bus.publish(DomainEvent::PhaseReviewNeeded {
                 project_id, phase_id: first.id.clone(),
@@ -136,15 +141,12 @@ async fn spawn_phase(
     mgr: &Arc<SessionManager>,
     orch: &crate::db::Session,
     phase: &PhasePlan,
-    bus: &EventBroadcaster,
-    project_id: Uuid,
 ) -> Result<Vec<Uuid>, crate::error::Error> {
     let mut kids = Vec::new();
     for (part, title) in &phase.part_titles {
         let s = mgr.spawn_child(orch.id, "implementation", title, Some(*part)).await?;
         kids.push(s.id);
     }
-    bus.publish(DomainEvent::PhaseAdvanced { project_id, phase_id: phase.id.clone() });
     Ok(kids)
 }
 
@@ -164,7 +166,8 @@ fn store_pending_phases(
         "depends_on": p.depends_on,
         "part_titles": p.part_titles,
     })).collect();
-    let json = serde_json::to_string(&serializable).unwrap();
+    let json = serde_json::to_string(&serializable)
+        .map_err(crate::error::Error::EventPayload)?;
     let conn = db.pool().get()?;
     conn.execute(
         "UPDATE sessions SET pending_phases_json = ?1 WHERE id = ?2",
