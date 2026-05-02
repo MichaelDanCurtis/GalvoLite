@@ -24,6 +24,15 @@ pub struct WatcherHandle {
 /// created if it does not yet exist (notify cannot watch a non-existent
 /// path on most platforms). Returns the handle the caller must keep alive.
 ///
+/// **Caller contract:** `project_path` must be a canonical path
+/// (`std::fs::canonicalize`'d). On macOS, FSEvents reports paths under
+/// `/private/var/...` even for inputs under `/var/...`; if the caller
+/// passes the un-canonicalized form, internal path comparison silently
+/// rejects every event and the watcher fires nothing. Today the only
+/// caller is `SessionManager::add_project`, which canonicalizes via
+/// `validate_and_canonicalize_project_path` before storing the project
+/// path — keep that invariant if you add another call site.
+///
 /// When `directive.md` is created or modified inside that dir, publishes
 /// `DomainEvent::DirectiveChanged { project_id }` on the bus, debounced
 /// to one frame per 500 ms (FS writes commonly fire 2-3 events per save).
@@ -62,7 +71,7 @@ pub fn spawn(
             use notify::EventKind;
             let relevant = matches!(
                 event.kind,
-                EventKind::Create(_) | EventKind::Modify(_) | EventKind::Other
+                EventKind::Create(_) | EventKind::Modify(_)
             );
             if !relevant {
                 return;

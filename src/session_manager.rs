@@ -881,7 +881,14 @@ impl SessionManager {
             self.event_bus.clone(),
         ) {
             Ok(h) => {
-                self.project_watchers.lock().unwrap().insert(project_id, h);
+                // Re-lock and use entry().or_insert(): if a concurrent caller
+                // beat us to insert(), `h` is dropped here (stopping the
+                // duplicate OS-level watcher) and the existing entry is kept.
+                self.project_watchers
+                    .lock()
+                    .unwrap()
+                    .entry(project_id)
+                    .or_insert(h);
             }
             Err(e) => {
                 tracing::warn!(
