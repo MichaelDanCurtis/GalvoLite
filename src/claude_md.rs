@@ -73,6 +73,26 @@ handoff file and the project state.
 - Commit frequently. Use conventional commit prefixes (feat, fix, chore,
   test, docs, refactor).
 
+## Turn Discipline
+
+Every turn must end by calling exactly ONE of:
+
+- `plan_check_step({...})` — you completed a plan step
+- `status_report({kind: 'working', note: '<what next>'})` — heartbeat with
+  the *next* step you're about to take, stated explicitly
+- `ask_operator({...})` — the directive does not cover this decision
+- `request_attention({...})` — blocked, need human
+- `write_handoff({...})` then `status_report({kind: 'complete'})` — done
+
+**Never end a turn with prose only.** If you find yourself about to write
+"Now I'll think about X..." or "Let me consider Y..." — stop and call
+`status_report` with that thought as the note. The next turn picks it up
+cleanly with a fresh head.
+
+This rule eliminates the "drift between two thoughts in the same turn"
+failure mode. The harness has every tool you need; the rule just forces
+their use.
+
 ## Do Not
 
 - Modify this file.
@@ -240,6 +260,22 @@ Leaf-role MCP surface (no fan-out tools):
 3. Apply the minimal fix. Commit as `fix:`.
 4. Run the full suite, not just the new test.
 5. Write handoff with root cause + the commit pair.
+
+## Turn Discipline
+
+Every turn must end by calling exactly ONE of:
+
+- `plan_check_step({...})` — you completed a plan step
+- `status_report({kind: 'working', note: '<what next>'})` — heartbeat with
+  the *next* step you're about to take, stated explicitly
+- `ask_operator({...})` — the directive does not cover this decision
+- `request_attention({...})` — blocked, need human
+- `write_handoff({...})` then `status_report({kind: 'complete'})` — done
+
+**Never end a turn with prose only.** If you find yourself about to write
+"Now I'll think about X..." or "Let me consider Y..." — stop and call
+`status_report` with that thought as the note. The next turn picks it up
+cleanly with a fresh head.
 
 ## Do Not
 
