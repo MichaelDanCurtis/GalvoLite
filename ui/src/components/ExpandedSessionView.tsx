@@ -9,9 +9,10 @@ import { RoleBadge } from "./RoleBadge";
 import { EventsTab } from "./EventsTab";
 import { PlanTab } from "./PlanTab";
 import { MetaTab } from "./MetaTab";
+import { DirectiveTab } from "./DirectiveTab";
 import { TabPanel } from "./TabPanel";
 
-type Tab = "terminal" | "events" | "plan" | "meta";
+type Tab = "terminal" | "events" | "plan" | "meta" | "directive";
 
 interface Props {
   session: Session;
@@ -172,7 +173,7 @@ export function ExpandedSessionView({
           <div className="opacity-60">ESC or click outside to close</div>
         </header>
         <div role="tablist" className="flex gap-1 px-4 py-1 border-b border-neutral-800 text-xs text-neutral-300">
-          {(["terminal", "events", "plan", "meta"] as const).map((t) => {
+          {(["terminal", "events", "plan", "meta", "directive"] as const).map((t) => {
             const label = t.charAt(0).toUpperCase() + t.slice(1);
             return (
               <button
@@ -215,6 +216,11 @@ export function ExpandedSessionView({
             {tab === "meta" && (
               <div data-testid="tab-panel-meta" className="flex-1 min-h-0 h-full">
                 <MetaTab session={session} />
+              </div>
+            )}
+            {tab === "directive" && (
+              <div data-testid="tab-panel-directive" className="flex-1 min-h-0 h-full">
+                <DirectiveTab projectId={session.project_id} />
               </div>
             )}
           </div>

@@ -32,9 +32,9 @@ function renderView() {
 }
 
 describe("ExpandedSessionView tabs", () => {
-  it("renders four tab labels", () => {
+  it("renders five tab labels", () => {
     renderView();
-    for (const label of ["Terminal", "Events", "Plan", "Meta"]) {
+    for (const label of ["Terminal", "Events", "Plan", "Meta", "Directive"]) {
       expect(screen.getByRole("tab", { name: label })).toBeInTheDocument();
     }
   });
@@ -61,5 +61,12 @@ describe("ExpandedSessionView tabs", () => {
     renderView();
     fireEvent.click(screen.getByRole("tab", { name: "Meta" }));
     expect(screen.getByTestId("tab-panel-meta")).toBeInTheDocument();
+  });
+
+  it("activates Directive tab on click", async () => {
+    renderView();
+    fireEvent.click(screen.getByRole("tab", { name: "Directive" }));
+    expect(screen.getByTestId("tab-panel-directive")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Directive" })).toHaveAttribute("aria-selected", "true");
   });
 });
