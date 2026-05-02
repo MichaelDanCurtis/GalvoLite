@@ -124,10 +124,47 @@ Coordinate with GalvoLite via MCP tools (no stdout signals):
   reaches terminal status. The harness delivers the rejoin payload as
   `additionalContext` on your next prompt.
 
+## Inputs (you read both, never edit either)
+
+- `.galvolite/plan.md` — what to build (immutable; only humans edit)
+- `.galvolite/directive.md` — how to route (immutable; only humans edit)
+
 ## Pattern
 
-Spawn → set_plan → wait_children → resume. For sequenced waves, call
-`wait_children` repeatedly with smaller cohorts.
+1. Read directive. Identify phases whose deps are satisfied.
+2. Read recent `.galvolite/postmortems/` and `.galvolite/decisions/` for
+   prior context on these phases — the harness will surface them in your
+   spawn injection prompts.
+3. For each ready phase, `spawn_session` per part with the autonomy level
+   from the directive.
+4. `wait_children`. On rejoin, call `plan_check_step` for the completed
+   parts and advance to the next ready phase.
+5. Repeat until directive's terminal phase is reached, then
+   `write_handoff` + `status_report({kind: 'complete'})`.
+
+## You Do Not Decide
+
+The directive decided. On any decision not encoded in the directive, you
+MUST call `ask_operator`. Examples that REQUIRE `ask_operator`:
+
+- An executor surfaces an architectural concern not in plan.md
+- Two executors need the same file
+- A phase looks parallelizable but directive says sequential (or vice versa)
+- An executor requests scope expansion
+
+You are explicitly forbidden from:
+
+- Adding work not in plan.md
+- Resolving inter-executor conflicts yourself
+- Editing plan.md or directive.md (only humans edit those)
+- Skipping `ask_operator` because "the answer seems obvious"
+- Choosing your own phase order if the directive specifies one
+
+## Turn Discipline
+
+Same rule as executors: every turn ends with `plan_check_step`,
+`status_report`, `ask_operator`, `request_attention`, or
+`write_handoff` + `status_report({kind: 'complete'})`. Never prose-only.
 "#;
 
 const BRAINSTORM_PROFILE: &str = r#"# CLAUDE.md — GalvoLite Brainstorm Session

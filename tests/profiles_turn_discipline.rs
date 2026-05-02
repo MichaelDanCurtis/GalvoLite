@@ -7,7 +7,7 @@
 //! (Sub-plan 7 Tasks 8 and 9 respectively) so each task's red-then-green
 //! cycle stays self-contained.
 
-use galvolite::claude_md::{fix_profile, implementation_profile};
+use galvolite::claude_md::{fix_profile, implementation_profile, orchestrator_profile};
 
 #[test]
 fn impl_profile_requires_turn_discipline() {
@@ -41,4 +41,49 @@ fn fix_profile_requires_turn_discipline() {
     );
     assert!(p.contains("plan_check_step"));
     assert!(p.contains("status_report"));
+}
+
+#[test]
+fn orch_profile_forbids_decisions() {
+    let p = orchestrator_profile();
+    assert!(
+        p.contains("## Inputs"),
+        "ORCH_PROFILE missing '## Inputs' heading"
+    );
+    assert!(
+        p.contains("## You Do Not Decide"),
+        "ORCH_PROFILE missing '## You Do Not Decide' heading"
+    );
+    assert!(
+        p.contains("## Turn Discipline"),
+        "ORCH_PROFILE missing '## Turn Discipline' heading"
+    );
+    assert!(
+        p.contains(".galvolite/plan.md"),
+        "ORCH_PROFILE missing '.galvolite/plan.md' reference"
+    );
+    assert!(
+        p.contains(".galvolite/directive.md"),
+        "ORCH_PROFILE missing '.galvolite/directive.md' reference"
+    );
+    assert!(
+        p.contains("only humans edit"),
+        "ORCH_PROFILE missing 'only humans edit' constraint"
+    );
+    assert!(
+        p.contains("MUST call `ask_operator`"),
+        "ORCH_PROFILE missing 'MUST call `ask_operator`' directive"
+    );
+    assert!(
+        p.contains("explicitly forbidden"),
+        "ORCH_PROFILE missing 'explicitly forbidden' clause"
+    );
+    assert!(
+        p.contains("Choosing your own phase order"),
+        "ORCH_PROFILE missing 'Choosing your own phase order' prohibition"
+    );
+    assert!(
+        p.contains("Never prose-only"),
+        "ORCH_PROFILE missing 'Never prose-only' turn-discipline closer"
+    );
 }
