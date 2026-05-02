@@ -213,8 +213,8 @@ GalvoLite does not duplicate cognitive memory. Claude Code already does that wel
 1. User clicks **+ New session → Brainstorm** on a project
 2. Harness spawns Claude in the project's main worktree (no branch, no filesystem isolation — brainstorm is discussion, not code changes)
 3. Brainstorm CLAUDE.md is injected — encourages opinionated exploration and eventual plan emission
-4. User and Claude iterate. When decomposition is ready, Claude writes `.galvolite/plan.md` and emits `[PLAN:READY]`
-5. Harness detects the file change + signal, shows plan preview in dashboard
+4. User and Claude iterate. When decomposition is ready, Claude writes `.galvolite/plan.md` and calls `set_plan({markdown})`
+5. Harness records the plan via the MCP call + file change, shows plan preview in dashboard
 6. User can **edit** `.galvolite/plan.md` directly before spawning
 7. User clicks **Spawn sessions** → harness creates worktree + branch + session per plan entry
 8. Brainstorm session stays alive (dismissible by user) in case follow-up discussion is needed
@@ -396,16 +396,16 @@ Three profiles, all sharing the core signal protocol, file ownership rules, and 
 - Terse to harness
 - Can write `.galvolite/plan.md` when decomposition is ready
 - Can write seed files when out-of-scope ideas arise
-- Emits `[PLAN:READY]` when plan is complete and self-consistent
+- Calls `set_plan({markdown})` when plan is complete and self-consistent
 - Does not write code changes
 
 ### 10.2 Implementation
 
-- Terse mode default for everything except `[ATTENTION:NEEDED]` messages
+- Terse mode default for everything except `request_attention` messages
 - Exclusive file ownership (defined in plan.md)
 - Works on assigned branch in assigned worktree — never switches
 - Writes verbose, self-contained continuation prompt on handoff (this is the single most important property of the profile — the next cycle's success depends entirely on this prompt's quality)
-- Emits `[STATUS:COMPLETE]` only when: clean tree, tests pass, branch pushed
+- Calls `status_report({kind: 'complete'})` only when: clean tree, tests pass, branch pushed
 - Can write seed files; does NOT investigate seeds beyond writing them
 
 ### 10.3 Scout
@@ -413,7 +413,7 @@ Three profiles, all sharing the core signal protocol, file ownership rules, and 
 - Short-lived, single-response typically
 - Reads a seed, investigates via file reads + grep
 - Writes report to `.galvolite/seeds/REPORT-SEED-NNN.md`
-- Emits `[STATUS:COMPLETE]` when report written
+- Calls `status_report({kind: 'complete'})` when report written
 - Does not modify source code, does not create branches
 
 ### 10.4 Shared: the "verbose handoff" rule
@@ -629,20 +629,17 @@ Detailed plan will be produced by the `writing-plans` skill. Anticipated phase b
 
 ---
 
-## Appendix A: Signal Protocol Quick Reference
+## Appendix A: Coordination Protocol Quick Reference
 
-```
-[STATUS:WORKING]                         # heartbeat
-[STATUS:COMPLETE]                        # done, tests pass, branch pushed
-[ATTENTION:NEEDED reason="..."]          # needs human; provide context on subsequent lines
-[ATTENTION:CONTEXT]                      # self-sensed pressure (safety net)
-[HANDOFF:READY]                          # handoff file written and validated
-[HANDOFF:BLOCKED reason="..."]           # cannot complete handoff
-[PLAN:READY]                             # .galvolite/plan.md written (brainstorm only)
-[SEED:NEW id="SEED-NNN"]                 # seed file created
-```
+Bracketed stdout signals (`[STATUS:*]`, `[HANDOFF:*]`, `[PLAN:READY]`, etc.) were
+removed in commit `e32ad8d` (Sub-plan 5 task 12). Sessions now coordinate via
+MCP tool calls — see §8.3 for the full tool surface and the signal→tool
+mapping. Lifecycle markers (turn boundaries, prompt submit) come from Claude
+Code hooks via `POST /hooks/ingest`.
 
-Signals must appear on their own line. Never inside code blocks, comments, or quoted text.
+Seed-file creation has no MCP tool yet — sessions just write
+`.galvolite/seeds/SEED-NNN-<slug>.md` and the filesystem watcher (notify crate,
+§13) picks it up.
 
 ---
 
