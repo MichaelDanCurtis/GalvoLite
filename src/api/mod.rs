@@ -9,6 +9,7 @@ pub mod hook_handlers;
 pub mod hooks;
 pub mod directive;
 pub mod operator;
+pub mod postmortems;
 pub mod spawn;
 
 use crate::session_manager::SessionManager;
@@ -41,6 +42,10 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route(
             "/api/projects/:id/directive",
             get(directive::get_directive).put(directive::put_directive),
+        )
+        .route(
+            "/api/projects/:id/postmortems",
+            get(postmortems::list),
         )
         .route("/api/operator/prompt/:id/answer", post(operator::answer))
         .route("/mcp", post(crate::mcp::transport::handle))

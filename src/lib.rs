@@ -19,6 +19,7 @@ pub mod ritual;
 pub mod session_manager;
 pub mod session_registry;
 pub mod plan_steps;
+pub mod postmortem;
 pub mod spawn_config;
 pub mod state;
 pub mod worktree;

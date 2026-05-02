@@ -69,6 +69,12 @@ pub enum DomainEvent {
     },
     #[serde(rename = "directive.changed")]
     DirectiveChanged { project_id: Uuid },
+    #[serde(rename = "postmortem.written")]
+    PostmortemWritten {
+        project_id: Uuid,
+        plan_part: u32,
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -119,7 +125,8 @@ impl DomainEvent {
             | DomainEvent::OperatorToast { session_id, .. }
             | DomainEvent::SessionResumed { session_id, .. }
             | DomainEvent::SessionChildrenResolved { session_id, .. } => *session_id == sid,
-            DomainEvent::DirectiveChanged { .. } => false,
+            DomainEvent::DirectiveChanged { .. }
+            | DomainEvent::PostmortemWritten { .. } => false,
         }
     }
 }

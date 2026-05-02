@@ -5,6 +5,7 @@
 
 use crate::mcp::registry::ToolDef;
 
+pub mod postmortem;
 pub mod spawn;
 pub mod tier1_introspection;
 pub mod tier1_role_handoff;
@@ -20,5 +21,6 @@ pub fn all() -> Vec<ToolDef> {
     v.extend(tier2_3_cross::tools());
     v.extend(tier4_stubs::tools());
     v.extend(spawn::tools());
+    v.extend(postmortem::tools());
     v
 }
