@@ -302,6 +302,17 @@ async fn ask_operator(ctx: ToolCtx, args: Value) -> ToolOutcome {
         },
     );
 
+    // Look up project so we can pass path + id into register_and_wait for
+    // decision auto-recording.
+    let session = match ctx.mgr.db().get_session(ctx.session_id) {
+        Ok(s) => s,
+        Err(e) => return ToolOutcome::AppError(e.to_string()),
+    };
+    let project = match ctx.mgr.get_project(session.project_id) {
+        Ok(p) => p,
+        Err(e) => return ToolOutcome::AppError(e.to_string()),
+    };
+
     // Live wait: publishes an `operator.prompt` domain event and parks on a
     // oneshot until the HTTP answer lands (or the per-call timeout fires).
     // The registry returns `{answer, timed_out}` directly; we pass it through
@@ -312,6 +323,8 @@ async fn ask_operator(ctx: ToolCtx, args: Value) -> ToolOutcome {
         .register_and_wait(
             ctx.mgr.event_bus(),
             ctx.session_id,
+            project.id,
+            std::path::PathBuf::from(&project.path),
             parsed.question.clone(),
             parsed.choices.clone(),
             parsed.timeout_secs,

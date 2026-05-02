@@ -97,6 +97,8 @@ async fn dropping_register_and_wait_future_clears_waiters_map() {
             reg2.register_and_wait(
                 &bus,
                 uuid::Uuid::new_v4(),
+                uuid::Uuid::new_v4(),
+                std::path::PathBuf::from("/tmp/test"),
                 "?".into(),
                 None,
                 Some(60),

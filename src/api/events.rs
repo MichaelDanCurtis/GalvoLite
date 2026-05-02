@@ -75,6 +75,12 @@ pub enum DomainEvent {
         plan_part: u32,
         path: String,
     },
+    #[serde(rename = "decision.recorded")]
+    DecisionRecorded {
+        project_id: Uuid,
+        session_id: Uuid,
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -126,7 +132,8 @@ impl DomainEvent {
             | DomainEvent::SessionResumed { session_id, .. }
             | DomainEvent::SessionChildrenResolved { session_id, .. } => *session_id == sid,
             DomainEvent::DirectiveChanged { .. }
-            | DomainEvent::PostmortemWritten { .. } => false,
+            | DomainEvent::PostmortemWritten { .. }
+            | DomainEvent::DecisionRecorded { .. } => false,
         }
     }
 }

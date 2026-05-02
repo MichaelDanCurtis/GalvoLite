@@ -21,14 +21,27 @@ use axum::{
     Json,
 };
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+/// Full context for a pending `ask_operator` call. Stored in the waiters map
+/// so that `answer()` can persist the decision without an extra session lookup.
+struct Pending {
+    tx: oneshot::Sender<serde_json::Value>,
+    session_id: Uuid,
+    project_id: Uuid,
+    project_path: PathBuf,
+    question: String,
+    choices: Option<Vec<String>>,
+    asked_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// Pending `ask_operator` calls indexed by their freshly-minted `prompt_id`.
 #[derive(Default)]
 pub struct OperatorPromptRegistry {
-    waiters: Mutex<HashMap<Uuid, oneshot::Sender<serde_json::Value>>>,
+    waiters: Mutex<HashMap<Uuid, Pending>>,
 }
 
 /// RAII guard that removes a `prompt_id` from the waiters map when dropped.
@@ -62,19 +75,31 @@ impl OperatorPromptRegistry {
     /// Lifetime of the `prompt_id` entry in the waiters map is owned by a
     /// `PromptGuard` RAII value: it's removed either by `answer()` on the
     /// happy path, or by the guard's `Drop` on timeout / future-cancel.
+    #[allow(clippy::too_many_arguments)]
     pub async fn register_and_wait(
         self: &Arc<Self>,
         bus: &EventBroadcaster,
         session_id: Uuid,
+        project_id: Uuid,
+        project_path: PathBuf,
         question: String,
         choices: Option<Vec<String>>,
         timeout_secs: Option<u64>,
     ) -> serde_json::Value {
         let prompt_id = Uuid::new_v4();
+        let asked_at = chrono::Utc::now();
         let (tx, mut rx) = oneshot::channel();
         {
             let mut map = self.waiters.lock().expect("waiters mutex poisoned");
-            map.insert(prompt_id, tx);
+            map.insert(prompt_id, Pending {
+                tx,
+                session_id,
+                project_id,
+                project_path,
+                question: question.clone(),
+                choices: choices.clone(),
+                asked_at,
+            });
         }
         let _guard = PromptGuard {
             reg: self.clone(),
@@ -98,10 +123,16 @@ impl OperatorPromptRegistry {
     /// Resolve a pending prompt with the operator's answer. Returns `Err(())`
     /// if no waiter is registered under this id (already answered, already
     /// timed out, or never existed).
+    ///
+    /// Side effects (in order):
+    ///  1. Persist the decision to `<project.path>/.galvolite/decisions/`.
+    ///  2. Publish `DomainEvent::DecisionRecorded` on the bus.
+    ///  3. Unpark the waiting MCP turn via the oneshot.
     pub async fn answer(
         &self,
         prompt_id: Uuid,
         answer: serde_json::Value,
+        mgr: &Arc<crate::session_manager::SessionManager>,
     ) -> Result<(), ()> {
         // Take the sender out under the lock, then release the lock BEFORE
         // calling `tx.send`. This avoids any chance of deadlock against the
@@ -111,8 +142,30 @@ impl OperatorPromptRegistry {
             map.remove(&prompt_id)
         };
         match entry {
-            Some(tx) => {
-                let _ = tx.send(serde_json::json!({ "answer": answer, "timed_out": false }));
+            Some(p) => {
+                // 1. Persist before unparking — if write fails, log + continue.
+                let answer_str = answer.as_str()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| serde_json::to_string(&answer).unwrap_or_default());
+                let d = crate::decisions::Decision {
+                    session_id: p.session_id,
+                    asked_at: p.asked_at,
+                    question: p.question,
+                    answer: answer_str,
+                    choices: p.choices,
+                };
+                match crate::decisions::record(&p.project_path, &d) {
+                    Ok(path) => {
+                        mgr.event_bus().publish(DomainEvent::DecisionRecorded {
+                            project_id: p.project_id,
+                            session_id: p.session_id,
+                            path: path.to_string_lossy().into_owned(),
+                        });
+                    }
+                    Err(e) => tracing::warn!(error = %e, "record decision failed"),
+                }
+                // 2. Unpark MCP turn.
+                let _ = p.tx.send(serde_json::json!({ "answer": answer, "timed_out": false }));
                 Ok(())
             }
             None => Err(()),
@@ -125,6 +178,11 @@ impl OperatorPromptRegistry {
             .lock()
             .expect("waiters mutex poisoned")
             .len()
+    }
+
+    /// Test-visible: return any one pending prompt id, if any exist.
+    pub async fn first_pending_id(&self) -> Option<Uuid> {
+        self.waiters.lock().expect("waiters mutex poisoned").keys().next().copied()
     }
 }
 
@@ -139,7 +197,7 @@ pub async fn answer(
     Json(body): Json<AnswerBody>,
 ) -> Result<StatusCode, StatusCode> {
     mgr.operator_registry()
-        .answer(prompt_id, body.answer)
+        .answer(prompt_id, body.answer, &mgr)
         .await
         .map(|_| StatusCode::NO_CONTENT)
         .map_err(|_| StatusCode::NOT_FOUND)
