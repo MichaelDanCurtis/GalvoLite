@@ -291,3 +291,26 @@ fn dfs_cycle<'a>(
     black.insert(node);
     Ok(())
 }
+
+// ── File I/O helpers ──────────────────────────────────────────────────────────
+
+/// Return the canonical path for a project's directive file.
+///
+/// `<project_path>/.galvolite/directive.md`
+pub fn directive_path(project_path: &std::path::Path) -> PathBuf {
+    project_path.join(".galvolite").join("directive.md")
+}
+
+/// Write `contents` to `path` atomically: write to `<path>.tmp`, then rename.
+///
+/// Creates parent directories if they do not exist.  The `.tmp` file lives
+/// next to the target so the rename is guaranteed to be on the same filesystem.
+pub fn write_atomic(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("md.tmp");
+    std::fs::write(&tmp, contents)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}

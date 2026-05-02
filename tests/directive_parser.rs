@@ -76,3 +76,31 @@ fn rejects_empty_phases_table() {
     let bad = "# Directive: D\n\nPlan: ./p\n\n## Phases\n\n| ID | Parts | Autonomy | Depends on |\n|----|-------|----------|------------|\n\n## Notes\n\n";
     assert!(matches!(parse(bad), Err(ParseError::MissingSection(_))));
 }
+
+#[test]
+fn write_atomic_round_trips() {
+    use galvolite::directive::{parse, write_atomic};
+    let tmp = tempfile::TempDir::new().unwrap();
+    let p = tmp.path().join("directive.md");
+    write_atomic(&p, SAMPLE).unwrap();
+    let read_back = std::fs::read_to_string(&p).unwrap();
+    let d = parse(&read_back).unwrap();
+    assert_eq!(d.name, "Sub-plan 7");
+}
+
+#[test]
+fn write_atomic_does_not_leave_tmp_file_on_success() {
+    use galvolite::directive::write_atomic;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let p = tmp.path().join("directive.md");
+    write_atomic(&p, SAMPLE).unwrap();
+    let entries: Vec<_> = std::fs::read_dir(tmp.path()).unwrap().collect();
+    assert_eq!(entries.len(), 1, "expected only directive.md, got {entries:?}");
+}
+
+#[test]
+fn directive_path_joins_galvolite_subdir() {
+    use galvolite::directive::directive_path;
+    let p = directive_path(std::path::Path::new("/tmp/proj"));
+    assert_eq!(p.to_str().unwrap(), "/tmp/proj/.galvolite/directive.md");
+}
