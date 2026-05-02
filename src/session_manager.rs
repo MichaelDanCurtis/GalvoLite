@@ -44,6 +44,11 @@ pub struct SessionManager {
     /// `POST /api/operator/prompt/:id/answer` route resolves it. Kept on the
     /// SessionManager so both callers share the same pending-map.
     operator_registry: Arc<OperatorPromptRegistry>,
+    /// Per-project directive watchers. Keyed by project_id; each entry holds
+    /// a notify::RecommendedWatcher whose Drop stops the watcher. Populated
+    /// by `start_directive_watchers` (startup) and `add_project` (live add),
+    /// drained by `delete_project`.
+    project_watchers: StdMutex<HashMap<Uuid, crate::directive_watcher::WatcherHandle>>,
 }
 
 impl SessionManager {
@@ -77,6 +82,7 @@ impl SessionManager {
             mcp_registry: crate::mcp::registry::ToolRegistry::build(),
             event_bus,
             operator_registry: OperatorPromptRegistry::new(),
+            project_watchers: StdMutex::new(HashMap::new()),
         }
     }
 
@@ -549,7 +555,9 @@ impl SessionManager {
     pub fn add_project(&self, mut new: crate::db::NewProject) -> Result<crate::db::Project> {
         let canonical = validate_and_canonicalize_project_path(&new.path)?;
         new.path = canonical;
-        self.db.insert_project(new)
+        let project = self.db.insert_project(new)?;
+        self.spawn_watcher(project.id, std::path::Path::new(&project.path));
+        Ok(project)
     }
 
     pub async fn send_to_session(&self, id: Uuid, text: String, newline: bool) -> Result<()> {
@@ -664,6 +672,10 @@ impl SessionManager {
                 tracing::warn!(session_id = %id, error = ?e, "kill during project delete failed; continuing");
             }
         }
+
+        // Drop watcher BEFORE cascade so the directory removal (if any)
+        // doesn't race notify on Linux/inotify.
+        self.project_watchers.lock().unwrap().remove(&project_id);
 
         self.db.delete_project_cascade(project_id)?;
         Ok(())
@@ -832,6 +844,53 @@ impl SessionManager {
                 }
             }
         });
+    }
+
+    /// Walk every existing project and spawn a directive watcher for it.
+    /// Idempotent: a project already watched is skipped. Errors are logged
+    /// per-project, not propagated — one broken project must not block the
+    /// rest.
+    ///
+    /// Call once at startup (after the runtime is up). `add_project` calls
+    /// `spawn_watcher` directly so live-added projects don't need a re-scan.
+    pub fn start_directive_watchers(&self) {
+        let projects = match self.db.list_projects() {
+            Ok(ps) => ps,
+            Err(e) => {
+                tracing::warn!(error = ?e, "list_projects for watcher startup failed");
+                return;
+            }
+        };
+        for p in projects {
+            self.spawn_watcher(p.id, std::path::Path::new(&p.path));
+        }
+    }
+
+    /// Internal: register a watcher for one project. Logs and swallows
+    /// errors. Used by both startup and `add_project`.
+    fn spawn_watcher(&self, project_id: Uuid, project_path: &std::path::Path) {
+        {
+            let watchers = self.project_watchers.lock().unwrap();
+            if watchers.contains_key(&project_id) {
+                return;
+            }
+        }
+        match crate::directive_watcher::spawn(
+            project_id,
+            project_path,
+            self.event_bus.clone(),
+        ) {
+            Ok(h) => {
+                self.project_watchers.lock().unwrap().insert(project_id, h);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    project_id = %project_id,
+                    error = %e,
+                    "directive watcher spawn failed"
+                );
+            }
+        }
     }
 
     /// Called from three sites: mcp.status_report (kind=complete|blocked) side-effect,
