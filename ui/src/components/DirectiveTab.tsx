@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { Directive } from "../types";
 
@@ -16,24 +16,41 @@ type LoadState = "loading" | Directive | null;
 
 export function DirectiveTab({ projectId }: Props) {
   const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  function fetchDirective() {
+  // Generation counter so that a stale in-flight `getDirective` resolution
+  // (from a previous projectId, or from before a parallel save kicked off
+  // its own refetch) cannot clobber state for the current generation.
+  const genRef = useRef(0);
+
+  function loadDirective(myGen: number) {
     setLoadState("loading");
+    setLoadError(null);
     api.getDirective(projectId).then(
-      (result) => setLoadState(result),
-      (e: Error) => {
-        // On fetch error, treat as no directive rather than crashing.
+      (result) => {
+        if (genRef.current !== myGen) return;
+        setLoadState(result);
+      },
+      (e: unknown) => {
+        if (genRef.current !== myGen) return;
+        const msg = e instanceof Error ? e.message : String(e);
         console.error("DirectiveTab: fetch failed", e);
+        setLoadError(msg);
         setLoadState(null);
       },
     );
   }
 
   useEffect(() => {
-    fetchDirective();
+    const myGen = ++genRef.current;
+    loadDirective(myGen);
+    return () => {
+      // Bump the gen so any still-pending response is ignored.
+      genRef.current++;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
@@ -56,13 +73,21 @@ export function DirectiveTab({ projectId }: Props) {
   }
 
   async function handleSave() {
+    const myGen = genRef.current;
+    setError(null);
     try {
       await api.putDirective(projectId, draft);
+      if (genRef.current !== myGen) return;
       setEditing(false);
-      fetchDirective();
-    } catch (e) {
-      setError((e as Error).message);
+      loadDirective(myGen);
+    } catch (e: unknown) {
+      if (genRef.current !== myGen) return;
+      setError(e instanceof Error ? e.message : String(e));
     }
+  }
+
+  function handleRetry() {
+    loadDirective(++genRef.current);
   }
 
   // ── Loading ───────────────────────────────────────────────────────────────
@@ -90,18 +115,38 @@ export function DirectiveTab({ projectId }: Props) {
         )}
         <div className="flex gap-2">
           <button
+            type="button"
             onClick={handleSave}
             className="px-3 py-1 rounded bg-blue-700 hover:bg-blue-600 text-white text-xs"
           >
             Save
           </button>
           <button
+            type="button"
             onClick={handleCancel}
             className="px-3 py-1 rounded bg-neutral-700 hover:bg-neutral-600 text-neutral-200 text-xs"
           >
             Cancel
           </button>
         </div>
+      </div>
+    );
+  }
+
+  // ── Fetch error ──────────────────────────────────────────────────────────
+  // Surfaces the failure distinctly from the empty/create state so a user
+  // does not click Create against an unreachable directive and overwrite it.
+  if (loadError !== null) {
+    return (
+      <div className="p-4 text-sm overflow-y-auto h-full space-y-3 text-neutral-200">
+        <p className="text-red-400">Couldn't load directive: {loadError}</p>
+        <button
+          type="button"
+          onClick={handleRetry}
+          className="px-3 py-1 rounded bg-neutral-700 hover:bg-neutral-600 text-neutral-200 text-xs"
+        >
+          Retry
+        </button>
       </div>
     );
   }
@@ -114,6 +159,7 @@ export function DirectiveTab({ projectId }: Props) {
           No directive yet. Brainstorm should produce one.
         </p>
         <button
+          type="button"
           onClick={handleCreate}
           className="px-3 py-1 rounded bg-blue-700 hover:bg-blue-600 text-white text-xs"
         >
@@ -131,6 +177,7 @@ export function DirectiveTab({ projectId }: Props) {
       <div className="flex items-center justify-between">
         <h2 className="text-base font-semibold text-neutral-100">{directive.name}</h2>
         <button
+          type="button"
           onClick={handleEdit}
           className="px-3 py-1 rounded bg-neutral-700 hover:bg-neutral-600 text-neutral-200 text-xs"
         >

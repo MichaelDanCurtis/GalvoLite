@@ -1,6 +1,8 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Directive } from "../types";
+import { DirectiveTab } from "./DirectiveTab";
+import { api } from "../api";
 
 vi.mock("../api", () => ({
   api: {
@@ -9,12 +11,8 @@ vi.mock("../api", () => ({
   },
 }));
 
-// Import after mock is registered so the component gets the mocked api.
-const { DirectiveTab } = await import("./DirectiveTab");
-const { api } = await import("../api");
-
-const mockGetDirective = api.getDirective as ReturnType<typeof vi.fn>;
-const mockPutDirective = api.putDirective as ReturnType<typeof vi.fn>;
+const mockGetDirective = vi.mocked(api.getDirective);
+const mockPutDirective = vi.mocked(api.putDirective);
 
 const stubDirective: Directive = {
   name: "Alpha Project",
@@ -51,48 +49,63 @@ describe("DirectiveTab", () => {
     );
   });
 
+  it("shows fetch-error state distinct from empty when getDirective rejects", async () => {
+    mockGetDirective.mockRejectedValueOnce(new Error("502: bad gateway"));
+    render(<DirectiveTab projectId="proj-1" />);
+    await waitFor(() =>
+      expect(screen.getByText(/couldn't load directive/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/502: bad gateway/)).toBeInTheDocument();
+    // Empty-state Create button must NOT appear: clicking it would risk
+    // overwriting an unreachable-but-existing directive.
+    expect(screen.queryByRole("button", { name: /create/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+  });
+
   it("Save shows inline error on 400", async () => {
     mockGetDirective.mockResolvedValueOnce(null);
     mockPutDirective.mockRejectedValueOnce(new Error("400: missing required section"));
     render(<DirectiveTab projectId="proj-1" />);
-    // Wait for empty state
     await waitFor(() =>
       expect(screen.getByText(/no directive yet/i)).toBeInTheDocument(),
     );
-    // Enter editing mode
     fireEvent.click(screen.getByRole("button", { name: /create/i }));
-    // Type something into the textarea
-    const textarea = screen.getByRole("textbox");
-    fireEvent.change(textarea, { target: { value: "# Draft" } });
-    // Click Save
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "# Draft" } });
     fireEvent.click(screen.getByRole("button", { name: /save/i }));
-    // Error message should appear
     await waitFor(() =>
       expect(screen.getByText(/400: missing required section/i)).toBeInTheDocument(),
     );
   });
 
-  it("Save then refetches", async () => {
-    // First getDirective call → null (before save)
+  it("Save coerces non-Error rejection to a string instead of 'undefined'", async () => {
     mockGetDirective.mockResolvedValueOnce(null);
-    // putDirective resolves successfully
-    mockPutDirective.mockResolvedValueOnce(undefined);
-    // Second getDirective call (after save) → populated directive
-    mockGetDirective.mockResolvedValueOnce(stubDirective);
-
+    // Backend client could in principle throw a non-Error; ensure we surface
+    // a readable string rather than reading `.message` off `undefined`.
+    mockPutDirective.mockRejectedValueOnce("raw rejection");
     render(<DirectiveTab projectId="proj-1" />);
-    // Wait for empty state
     await waitFor(() =>
       expect(screen.getByText(/no directive yet/i)).toBeInTheDocument(),
     );
-    // Enter editing mode
     fireEvent.click(screen.getByRole("button", { name: /create/i }));
-    // Type something
-    const textarea = screen.getByRole("textbox");
-    fireEvent.change(textarea, { target: { value: "# Alpha Project" } });
-    // Click Save
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "# Draft" } });
     fireEvent.click(screen.getByRole("button", { name: /save/i }));
-    // After successful save + refetch, directive name should appear
+    await waitFor(() =>
+      expect(screen.getByText(/raw rejection/i)).toBeInTheDocument(),
+    );
+  });
+
+  it("Save then refetches", async () => {
+    mockGetDirective.mockResolvedValueOnce(null);
+    mockPutDirective.mockResolvedValueOnce(undefined);
+    mockGetDirective.mockResolvedValueOnce(stubDirective);
+
+    render(<DirectiveTab projectId="proj-1" />);
+    await waitFor(() =>
+      expect(screen.getByText(/no directive yet/i)).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /create/i }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "# Alpha Project" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
     await waitFor(() =>
       expect(screen.getByText("Alpha Project")).toBeInTheDocument(),
     );
