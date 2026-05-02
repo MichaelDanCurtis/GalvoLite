@@ -85,7 +85,7 @@ The manual ritual is the single biggest friction point. GalvoLite's v1 north sta
 | **Session** | A long-lived Claude Code process GalvoLite manages. Has exactly one pty, one worktree, one branch (except brainstorm), one task, one role. |
 | **Role** | One of `brainstorm`, `implementation`, `scout`, `fix`. Determines which CLAUDE.md profile is injected. (`fix` uses the Implementation profile with a specialized initial prompt.) |
 | **Cycle** | One `/clear` boundary within a session's life. A session has N cycles; each cycle ends when context pressure triggers the ritual. |
-| **Ritual** | The automated sequence: save-memory → wait for `[HANDOFF:READY]` → send `/clear` → send restore prompt. The process is never killed during normal operation. |
+| **Ritual** | The automated sequence: save-memory → wait for the session's `write_handoff` MCP call → send `/clear` → send restore prompt. The process is never killed during normal operation. |
 | **Plan** | `.galvolite/plan.md` — structured decomposition Claude writes during brainstorm. Harness parses to spawn sessions. |
 | **Handoff** | Per-cycle durable record at `.galvolite/handoffs/<session-id>/<timestamp>.md`. Contains continuation prompt consumed by the next cycle. |
 | **Seed** | Out-of-scope idea captured mid-work at `.galvolite/seeds/SEED-NNN-<slug>.md`. Promotable to a task. |
@@ -156,7 +156,7 @@ The heartbeat of the product. Drives the E and A priority goals.
 ### 5.1 Process model
 
 - One session = one long-lived `claude` CLI process controlled via pty
-- The process is **never killed** during normal operation. It is only torn down on: (a) explicit user "Kill session" click, (b) fatal pty/process error, or (c) successful `[STATUS:COMPLETE]` + PR merge.
+- The process is **never killed** during normal operation. It is only torn down on: (a) explicit user "Kill session" click, (b) fatal pty/process error, or (c) successful `status_report({kind: 'complete'})` + PR merge.
 - `/clear` is sent as a keystroke; the conversation resets but the process stays alive, authentication is preserved, startup cost is paid once per session
 - Cycles are delineated by `/clear` events
 
@@ -166,7 +166,7 @@ The heartbeat of the product. Drives the E and A priority goals.
 |---|---|---|---|
 | Primary | **Claude Code plugin**: hooks `PreCompact` + `UserPromptSubmit` counter | Ground truth | Fires when real compaction is imminent or tool-call threshold hit |
 | Fallback | **"Handoff now" button** in dashboard | Manual, always works | User override |
-| Safety net | **CLAUDE.md instructs Claude to emit `[ATTENTION:CONTEXT]`** when it self-senses pressure | Unreliable | Extra belt-and-suspenders |
+| Safety net | **CLAUDE.md instructs Claude to call `request_attention({reason: 'context'})`** when it self-senses pressure | Unreliable | Extra belt-and-suspenders |
 
 ### 5.3 The ritual sequence
 
@@ -177,7 +177,7 @@ The heartbeat of the product. Drives the E and A priority goals.
    Includes: state summary, decisions made, files touched, open questions,
    next steps, and a VERBOSE, SELF-CONTAINED continuation prompt for the
    next cycle.
-4. Claude emits [HANDOFF:READY]
+4. Claude calls `write_handoff({summary, next_steps})`; harness validates and persists the file.
 5. Harness sends /clear
 6. Harness sends restore prompt:
    "Read .galvolite/handoffs/<session-id>/<latest>.md. You are the next
@@ -239,7 +239,7 @@ GalvoLite does not duplicate cognitive memory. Claude Code already does that wel
   >
   > Read GALVO_ARCHITECTURE.md §6.2 and engine/trust/README.md.
   > Build the policy evaluator as specified. Tests in engine/trust/tests/.
-  > Commit incrementally. Emit [STATUS:COMPLETE] when branch is mergeable.
+  > Commit incrementally. Call `status_report({kind: 'complete'})` when branch is mergeable.
 
 ## Session: phase-d-a2a
 - **Branch:** feature/phase-d-a2a
@@ -269,7 +269,7 @@ Claude's decomposition is often wrong on first pass. Human review + the ability 
 
 ### 7.1 Flow
 
-1. Implementation session signals `[STATUS:COMPLETE]`
+1. Implementation session calls `status_report({kind: 'complete'})`
 2. Harness verifies: clean working tree, tests pass (optional check), branch pushed
 3. Harness auto-creates PR via `POST /repos/{owner}/{repo}/pulls`
 4. GitHub's existing Copilot auto-review (already configured by user) runs
@@ -327,20 +327,32 @@ spawning → working → [context_pressure] → handing_off → working (next cy
 
 Terminal states: `merged`, `dismissed`, `error`, `killed`.
 
-### 8.3 Signal protocol (superset of PRD)
+### 8.3 Coordination protocol (MCP tools + hooks)
 
-Emitted by Claude on its own line. Parsed from pty stdout.
+> **History:** v0.x parsed bracketed signals (`[STATUS:WORKING]`, `[HANDOFF:READY]`,
+> etc.) from pty stdout. That pipeline (`SignalPump`, `src/signals.rs`,
+> `signals` table) was deleted in commit `e32ad8d` (Sub-plan 5 task 12). The
+> stdout reader now only feeds the scrollback buffer; coordination flows
+> through MCP tool calls (authoritative) plus Claude Code hooks (lifecycle
+> markers like turn boundaries).
 
-| Signal | When | Emitted by |
+Sessions coordinate with GalvoLite by calling MCP tools on the per-session
+`/mcp` endpoint (bearer-token auth via the session's `api_token`). The full
+tool surface is documented in each role's `CLAUDE.md` profile
+(`src/claude_md.rs`); the headline tools and their replaced-signals are:
+
+| MCP tool | Replaces signal | Notes |
 |---|---|---|
-| `[STATUS:WORKING]` | Heartbeat every ~10-15 tool calls | Implementation, Scout |
-| `[STATUS:COMPLETE]` | Task done, tests pass, branch pushed | Implementation |
-| `[ATTENTION:NEEDED reason="..."]` | Needs human input | Any |
-| `[ATTENTION:CONTEXT]` | Self-sensed context pressure (safety net) | Any |
-| `[HANDOFF:READY]` | Handoff file written and validated | Any |
-| `[HANDOFF:BLOCKED reason="..."]` | Cannot complete handoff | Any |
-| `[PLAN:READY]` | `.galvolite/plan.md` written and validated | Brainstorm |
-| `[SEED:NEW id="..."]` | Seed file created | Any |
+| `status_report({kind: 'working'\|'complete'\|'blocked', note?})` | `[STATUS:*]` | Heartbeat + state transitions; drives `SessionState` machine. |
+| `request_attention({reason})` | `[ATTENTION:NEEDED]` / `[ATTENTION:CONTEXT]` | Operator notification + dashboard pin. |
+| `write_handoff({summary, next_steps})` | `[HANDOFF:READY]` / `[HANDOFF:BLOCKED]` | Persists `.galvolite/handoffs/<sid>/<ts>.md`; status reported via `kind`. |
+| `set_plan({markdown})` + `plan_check_step({...})` | `[PLAN:READY]` | Populates `plan_steps` table; emits `SessionPlanReplaced` / `SessionPlanStepChanged` to dashboard. |
+| `set_role({role})` | `[ROLE:*]` | Mid-session role transition; updates `sessions.role` + reinjects profile if applicable. |
+| `spawn_session({role, task})` + `wait_children({children})` | (new) | Sub-plan 6 fan-out + idle-rejoin; not in v0.x signal protocol. |
+| `notify_operator({level, message})` / `ask_operator({question, choices?})` | (new) | Operator-loop primitives. |
+
+Lifecycle markers (turn boundaries, prompt submit, etc.) come from Claude
+Code hooks via `POST /hooks/ingest` rather than from stdout parsing.
 
 ---
 
