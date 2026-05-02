@@ -67,6 +67,8 @@ pub enum DomainEvent {
         session_id: Uuid,
         children: Vec<ChildResolution>,
     },
+    #[serde(rename = "directive.changed")]
+    DirectiveChanged { project_id: Uuid },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -117,6 +119,7 @@ impl DomainEvent {
             | DomainEvent::OperatorToast { session_id, .. }
             | DomainEvent::SessionResumed { session_id, .. }
             | DomainEvent::SessionChildrenResolved { session_id, .. } => *session_id == sid,
+            DomainEvent::DirectiveChanged { .. } => false,
         }
     }
 }

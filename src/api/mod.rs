@@ -7,6 +7,7 @@ pub mod auth;
 pub mod events;
 pub mod hook_handlers;
 pub mod hooks;
+pub mod directive;
 pub mod operator;
 pub mod spawn;
 
@@ -37,6 +38,10 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route("/api/sessions/:id/terminal", get(terminal_ws))
         .route("/api/fs/list", get(list_directory))
         .route("/hooks/ingest", post(hooks::ingest))
+        .route(
+            "/api/projects/:id/directive",
+            get(directive::get_directive).put(directive::put_directive),
+        )
         .route("/api/operator/prompt/:id/answer", post(operator::answer))
         .route("/mcp", post(crate::mcp::transport::handle))
         .layer(CorsLayer::permissive())
@@ -65,7 +70,7 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
 ///   string is safe to echo back since it's generated from our validator,
 ///   not from filesystem or SQL internals)
 /// - All other variants (including `Db` / `Io` / `Config`) → 500
-fn err_to_response(e: crate::error::Error) -> Response {
+pub(crate) fn err_to_response(e: crate::error::Error) -> Response {
     use crate::error::Error;
     match &e {
         Error::SessionNotFound(_) | Error::ProjectNotFound(_) => {
