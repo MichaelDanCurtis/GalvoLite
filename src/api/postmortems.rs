@@ -29,6 +29,14 @@ pub async fn list(
     };
     match postmortem::list_for_part(std::path::Path::new(&project.path), q.part) {
         Ok(list) => Json(list).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => {
+            tracing::error!(
+                project_id = %project_id,
+                part = q.part,
+                error = %e,
+                "list postmortems failed"
+            );
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
+        }
     }
 }

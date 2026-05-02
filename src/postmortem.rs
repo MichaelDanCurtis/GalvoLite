@@ -90,8 +90,20 @@ pub fn list_for_part(project_path: &Path, part: u32) -> std::io::Result<Vec<Post
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
         if name_str.starts_with(&prefix) && name_str.ends_with(".md") {
-            if let Ok(s) = std::fs::read_to_string(entry.path()) {
-                if let Some(pm) = parse(&s) { out.push(pm); }
+            let path = entry.path();
+            match std::fs::read_to_string(&path) {
+                Ok(s) => match parse(&s) {
+                    Some(pm) => out.push(pm),
+                    None => tracing::warn!(
+                        path = %path.display(),
+                        "postmortem parse failed; skipping"
+                    ),
+                },
+                Err(e) => tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "postmortem read failed; skipping"
+                ),
             }
         }
     }
@@ -135,6 +147,6 @@ fn section(body: &str, heading: &str) -> Option<String> {
     let needle = format!("## {heading}\n");
     let idx = body.find(&needle)?;
     let rest = &body[idx + needle.len()..];
-    let end = rest.find("\n## ").map(|i| i).unwrap_or(rest.len());
+    let end = rest.find("\n## ").unwrap_or(rest.len());
     Some(rest[..end].trim().to_string())
 }
