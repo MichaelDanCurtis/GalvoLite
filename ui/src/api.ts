@@ -103,6 +103,9 @@ export const api = {
   /**
    * Fetch the directive for a project. Returns `null` when no directive
    * has been written yet (server returns 404). Any other non-2xx is thrown.
+   *
+   * Bypasses the shared `request<T>` helper because 404 must map to `null`
+   * rather than throw, which `request<T>`'s signature can't express.
    */
   getDirective: async (projectId: string): Promise<Directive | null> => {
     const resp = await fetch(`/api/projects/${projectId}/directive`);
@@ -118,6 +121,10 @@ export const api = {
    * Write the directive markdown for a project. The server parses + atomically
    * writes; on parse failure the server returns 400 with the parse error in the
    * body, which we surface as the thrown Error message.
+   *
+   * Bypasses the shared `request<T>` helper because the success response is
+   * 200 with an empty body and no `content-length`; `request<T>` would hand
+   * that to `resp.json()` and throw a parse error.
    */
   putDirective: async (projectId: string, markdown: string): Promise<void> => {
     const resp = await fetch(`/api/projects/${projectId}/directive`, {

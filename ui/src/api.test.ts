@@ -78,6 +78,7 @@ describe("api.putDirective", () => {
       "/api/projects/p1/directive",
       expect.objectContaining({
         method: "PUT",
+        headers: expect.objectContaining({ "Content-Type": "application/json" }),
         body: JSON.stringify({ markdown: "# Directive: X" }),
       }),
     );
