@@ -32,7 +32,7 @@ async fn spawn_child_creates_worktree_and_db_row_with_parent() {
         "/bin/cat".into(), vec![],
     ).await.expect("parent spawn");
 
-    let child = app.mgr.spawn_child(parent.id, "implementation", "child task")
+    let child = app.mgr.spawn_child(parent.id, "implementation", "child task", None)
         .await.expect("spawn_child");
 
     assert_eq!(child.parent_session_id, Some(parent.id));
@@ -52,8 +52,8 @@ async fn set_waiting_on_persists_json_array() {
     let parent = app.mgr.spawn_session(
         proj.id, "parent".into(), "implementation".into(), "/bin/cat".into(), vec![]
     ).await.unwrap();
-    let c1 = app.mgr.spawn_child(parent.id, "implementation", "a").await.unwrap();
-    let c2 = app.mgr.spawn_child(parent.id, "implementation", "b").await.unwrap();
+    let c1 = app.mgr.spawn_child(parent.id, "implementation", "a", None).await.unwrap();
+    let c2 = app.mgr.spawn_child(parent.id, "implementation", "b", None).await.unwrap();
 
     app.mgr.set_waiting_on(parent.id, &[c1.id, c2.id]).await.unwrap();
 
@@ -80,7 +80,7 @@ async fn build_rejoin_markdown_lists_each_child() {
     let parent = app.mgr.spawn_session(
         proj.id, "p".into(), "implementation".into(), "/bin/cat".into(), vec![]
     ).await.unwrap();
-    let c = app.mgr.spawn_child(parent.id, "implementation", "x").await.unwrap();
+    let c = app.mgr.spawn_child(parent.id, "implementation", "x", None).await.unwrap();
     let conn = app.db.pool().get().unwrap();
     conn.execute(
         "UPDATE sessions SET terminal_status = 'complete', handoff_path = '/tmp/h.md' WHERE id = ?1",
@@ -106,8 +106,8 @@ async fn on_child_terminal_clears_one_of_two_children() {
     let parent = app.mgr.spawn_session(
         proj.id, "p".into(), "implementation".into(), "/bin/cat".into(), vec![]
     ).await.unwrap();
-    let c1 = app.mgr.spawn_child(parent.id, "implementation", "a").await.unwrap();
-    let c2 = app.mgr.spawn_child(parent.id, "implementation", "b").await.unwrap();
+    let c1 = app.mgr.spawn_child(parent.id, "implementation", "a", None).await.unwrap();
+    let c2 = app.mgr.spawn_child(parent.id, "implementation", "b", None).await.unwrap();
     app.mgr.set_waiting_on(parent.id, &[c1.id, c2.id]).await.unwrap();
 
     app.mgr.on_child_terminal(c1.id, "complete").await.unwrap();
@@ -134,7 +134,7 @@ async fn on_child_terminal_writes_pending_rejoin_when_last() {
     let parent = app.mgr.spawn_session(
         proj.id, "p".into(), "implementation".into(), "/bin/cat".into(), vec![]
     ).await.unwrap();
-    let c = app.mgr.spawn_child(parent.id, "implementation", "x").await.unwrap();
+    let c = app.mgr.spawn_child(parent.id, "implementation", "x", None).await.unwrap();
     app.mgr.set_waiting_on(parent.id, &[c.id]).await.unwrap();
 
     app.mgr.on_child_terminal(c.id, "complete").await.unwrap();
@@ -163,7 +163,7 @@ async fn status_report_complete_triggers_on_child_terminal_via_state() {
     let parent = app.mgr.spawn_session(
         proj.id, "p".into(), "implementation".into(), "/bin/cat".into(), vec![]
     ).await.unwrap();
-    let c = app.mgr.spawn_child(parent.id, "implementation", "x").await.unwrap();
+    let c = app.mgr.spawn_child(parent.id, "implementation", "x", None).await.unwrap();
     app.mgr.set_waiting_on(parent.id, &[c.id]).await.unwrap();
 
     // Simulate the child reporting complete via the same path mcp tools use.
@@ -255,7 +255,7 @@ async fn mcp_wait_children_records_waiting_on() {
     let parent = app.mgr.spawn_session(
         proj.id, "p".into(), "implementation".into(), "/bin/cat".into(), vec![],
     ).await.unwrap();
-    let c = app.mgr.spawn_child(parent.id, "implementation", "x").await.unwrap();
+    let c = app.mgr.spawn_child(parent.id, "implementation", "x", None).await.unwrap();
     let token = app.db.pool().get().unwrap().query_row(
         "SELECT api_token FROM sessions WHERE id = ?1",
         [parent.id.to_string()],
@@ -294,7 +294,7 @@ async fn mcp_wait_children_short_circuits_on_already_terminal() {
     let parent = app.mgr.spawn_session(
         proj.id, "p".into(), "implementation".into(), "/bin/cat".into(), vec![],
     ).await.unwrap();
-    let c = app.mgr.spawn_child(parent.id, "implementation", "x").await.unwrap();
+    let c = app.mgr.spawn_child(parent.id, "implementation", "x", None).await.unwrap();
     app.db.pool().get().unwrap().execute(
         "UPDATE sessions SET terminal_status = 'complete' WHERE id = ?1",
         [c.id.to_string()],
@@ -341,8 +341,8 @@ async fn api_get_and_list_sessions_serialize_waiting_on_as_array() {
     let parent = app.mgr.spawn_session(
         proj.id, "p".into(), "implementation".into(), "/bin/cat".into(), vec![],
     ).await.unwrap();
-    let c1 = app.mgr.spawn_child(parent.id, "implementation", "a").await.unwrap();
-    let c2 = app.mgr.spawn_child(parent.id, "implementation", "b").await.unwrap();
+    let c1 = app.mgr.spawn_child(parent.id, "implementation", "a", None).await.unwrap();
+    let c2 = app.mgr.spawn_child(parent.id, "implementation", "b", None).await.unwrap();
     app.mgr.set_waiting_on(parent.id, &[c1.id, c2.id]).await.unwrap();
 
     // GET /api/sessions/:id — single-session shape

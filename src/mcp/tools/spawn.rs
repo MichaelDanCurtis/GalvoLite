@@ -21,7 +21,8 @@ pub fn tools() -> Vec<ToolDef> {
                 "type": "object",
                 "properties": {
                     "role": { "type": "string", "enum": allowed_roles_value },
-                    "task": { "type": "string" }
+                    "task": { "type": "string" },
+                    "plan_part": { "type": "integer", "minimum": 0 }
                 },
                 "required": ["role", "task"]
             }),
@@ -51,6 +52,8 @@ pub fn tools() -> Vec<ToolDef> {
 struct SpawnArgs {
     role: String,
     task: String,
+    #[serde(default)]
+    plan_part: Option<u32>,
 }
 
 async fn spawn_session(ctx: ToolCtx, args: Value) -> ToolOutcome {
@@ -62,7 +65,7 @@ async fn spawn_session(ctx: ToolCtx, args: Value) -> ToolOutcome {
         return ToolOutcome::AppError(format!("unknown role: {}", parsed.role));
     }
 
-    let child = match ctx.mgr.spawn_child(ctx.session_id, &parsed.role, &parsed.task).await {
+    let child = match ctx.mgr.spawn_child(ctx.session_id, &parsed.role, &parsed.task, parsed.plan_part).await {
         Ok(c) => c,
         Err(e) => return ToolOutcome::AppError(e.to_string()),
     };

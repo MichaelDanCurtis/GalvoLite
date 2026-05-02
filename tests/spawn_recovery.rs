@@ -23,7 +23,7 @@ async fn recovery_resolves_already_terminal_children() {
     let parent = app1.mgr.spawn_session(
         proj.id, "p".into(), "implementation".into(), "/bin/cat".into(), vec![]
     ).await.unwrap();
-    let c = app1.mgr.spawn_child(parent.id, "implementation", "x").await.unwrap();
+    let c = app1.mgr.spawn_child(parent.id, "implementation", "x", None).await.unwrap();
     app1.mgr.set_waiting_on(parent.id, &[c.id]).await.unwrap();
     // Stamp terminal_status directly — simulate the reactor missing the event.
     app1.db.pool().get().unwrap().execute(

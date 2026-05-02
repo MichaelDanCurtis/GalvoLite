@@ -32,8 +32,8 @@ async fn spawn_e2e_two_children_parent_sees_rejoin() {
     ).await.unwrap();
 
     // Spawn two children manually (E2E: spawn via SessionManager directly).
-    let c1 = app.mgr.spawn_child(parent.id, "implementation", "task1").await.unwrap();
-    let c2 = app.mgr.spawn_child(parent.id, "implementation", "task2").await.unwrap();
+    let c1 = app.mgr.spawn_child(parent.id, "implementation", "task1", None).await.unwrap();
+    let c2 = app.mgr.spawn_child(parent.id, "implementation", "task2", None).await.unwrap();
     app.mgr.set_waiting_on(parent.id, &[c1.id, c2.id]).await.unwrap();
 
     // Drive both to terminal via the same path mcp tools take.

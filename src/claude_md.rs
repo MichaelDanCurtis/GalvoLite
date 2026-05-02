@@ -379,3 +379,48 @@ impl<'a> InjectionPrompt<'a> {
         )
     }
 }
+
+/// Build a "## Prior context" block to prepend to an injection prompt.
+/// Returns an empty string if no postmortems or decisions are available.
+/// Caps total bytes at 2 KiB; oldest blocks dropped first.
+pub fn build_prior_context(project_path: &std::path::Path, plan_part: Option<u32>) -> String {
+    let cap: usize = 2048;
+    let mut blocks: Vec<String> = Vec::new();
+
+    if let Some(part) = plan_part {
+        if let Ok(pms) = crate::postmortem::list_for_part(project_path, part) {
+            // pms is asc by written_at; iter().rev() = newest first; take(3) = newest 3.
+            for pm in pms.iter().rev().take(3) {
+                blocks.push(format!(
+                    "### Postmortem (part {}, {}, {} cycles)\n\nGotchas: {}\n\nFollow-ups: {}\n",
+                    pm.plan_part,
+                    pm.outcome,
+                    pm.cycles,
+                    pm.gotchas.lines().take(5).collect::<Vec<_>>().join(" "),
+                    pm.follow_ups.lines().take(3).collect::<Vec<_>>().join(" "),
+                ));
+            }
+        }
+    }
+
+    if let Ok(decs) = crate::decisions::list_recent(project_path, 10) {
+        // list_recent is desc by asked_at, truncated. take(5) = newest 5.
+        for d in decs.iter().take(5) {
+            blocks.push(format!("### Decision: {}\n\n{}\n", d.question, d.answer));
+        }
+    }
+
+    let header = "## Prior context\n\n";
+    let mut out = String::from(header);
+    for b in blocks {
+        if out.len() + b.len() > cap {
+            break;
+        }
+        out.push_str(&b);
+    }
+    if out.len() == header.len() {
+        return String::new();
+    }
+    out.push('\n');
+    out
+}

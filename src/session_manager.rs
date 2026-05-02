@@ -327,6 +327,7 @@ impl SessionManager {
         parent_id: Uuid,
         role: &str,
         task: &str,
+        plan_part: Option<u32>,
     ) -> Result<crate::db::Session> {
         let parent = self.db.get_session(parent_id)?;
         let project = self.db.get_project(parent.project_id)?;
@@ -517,6 +518,27 @@ impl SessionManager {
             let mut running = mgr.running.lock().unwrap();
             running.remove(&session_id);
         });
+
+        // Injection prompt: prepend prior-context block (postmortems + decisions) if available.
+        let prior = crate::claude_md::build_prior_context(
+            std::path::Path::new(&project.path),
+            plan_part,
+        );
+        let injection = InjectionPrompt {
+            task_summary: task,
+            session_id: &session_id.to_string(),
+            claude_md_path: &claude_md_path.to_string_lossy(),
+        };
+        let full = if prior.is_empty() {
+            format!("{}\n", injection.render())
+        } else {
+            format!("{}\n{}\n", prior, injection.render())
+        };
+        if let Err(e) = handle.write_str(&full).await {
+            handle.kill();
+            orphan_session(&self.db, &self.event_bus, session_id, "prompt_inject_failed");
+            return Err(e);
+        }
 
         // Re-fetch after all mutations so the returned row is fully up-to-date.
         let session = self.db.get_session(session_id)?;
