@@ -176,6 +176,123 @@ fn store_pending_phases(
     Ok(())
 }
 
+// ─── Phase reactor ────────────────────────────────────────────────────────────
+
+/// Advance the next phase from `pending_phases_json`. Pops the head, spawns it,
+/// re-saves the tail. Emits `PhaseReviewNeeded` if autonomy is non-`full`.
+/// Returns `Ok(true)` if a phase was advanced, `Ok(false)` if the queue was
+/// empty or the session row was not found.
+pub async fn advance_next_phase(
+    mgr: &Arc<SessionManager>,
+    orch_id: Uuid,
+    project_id: Uuid,
+) -> Result<bool, crate::error::Error> {
+    let bus = mgr.event_bus().clone();
+    let raw: Option<String> = {
+        let conn = mgr.db().pool().get()?;
+        conn.query_row(
+            "SELECT pending_phases_json FROM sessions WHERE id = ?1",
+            [orch_id.to_string()],
+            |r| r.get(0),
+        )
+        .ok()
+        .flatten()
+    };
+    let Some(json) = raw else { return Ok(false); };
+    let mut queue: Vec<serde_json::Value> =
+        serde_json::from_str(&json).unwrap_or_default();
+    if queue.is_empty() {
+        return Ok(false);
+    }
+    let head = queue.remove(0);
+    let phase = PhasePlan {
+        id: head["id"].as_str().unwrap_or("").to_string(),
+        autonomy: match head["autonomy"].as_str().unwrap_or("manual") {
+            "full" => Autonomy::Full,
+            "review" => Autonomy::Review,
+            _ => Autonomy::Manual,
+        },
+        depends_on: vec![],
+        part_titles: serde_json::from_value(head["part_titles"].clone())
+            .unwrap_or_default(),
+    };
+    let orch = mgr.db().get_session(orch_id)?;
+    let kids = spawn_phase(mgr, &orch, &phase).await?;
+
+    // State writes BEFORE bus.publish — invariant from execute_plan driver.
+    mgr.set_waiting_on(orch_id, &kids).await?;
+
+    let tail_json = serde_json::to_string(&queue)
+        .map_err(crate::error::Error::EventPayload)?;
+    {
+        let conn = mgr.db().pool().get()?;
+        conn.execute(
+            "UPDATE sessions SET pending_phases_json = ?1 WHERE id = ?2",
+            rusqlite::params![tail_json, orch_id.to_string()],
+        )?;
+    }
+
+    bus.publish(DomainEvent::PhaseAdvanced {
+        project_id,
+        phase_id: phase.id.clone(),
+    });
+    if matches!(phase.autonomy, Autonomy::Review | Autonomy::Manual) {
+        bus.publish(DomainEvent::PhaseReviewNeeded {
+            project_id,
+            phase_id: phase.id,
+        });
+    }
+    Ok(true)
+}
+
+/// Background reactor: subscribes to `SessionChildrenResolved` events.
+/// When the resolved session is the root orchestrator for a project (no parent,
+/// not ended) and the next pending phase has `autonomy=full`, auto-advance.
+/// For `review`/`manual` phases it leaves the queue intact and lets
+/// `approve_phase` advance on the operator's explicit command.
+pub fn start_phase_reactor(mgr: Arc<SessionManager>) {
+    let mut rx = mgr.event_bus().subscribe();
+    tokio::spawn(async move {
+        while let Ok(ev) = rx.recv().await {
+            if let DomainEvent::SessionChildrenResolved { session_id, .. } = ev {
+                // Fetch the session and apply the orchestrator heuristic:
+                // top-level (no parent) + still alive (ended_at IS NULL).
+                // The DB CHECK constraint does not allow "orchestrator" as a
+                // role value — this is a runtime profile, not a stored role.
+                let orch = match mgr.db().get_session(session_id) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                if !(orch.parent_session_id.is_none() && orch.ended_at.is_none()) {
+                    continue;
+                }
+                // Peek at queue head to decide whether to auto-advance.
+                let raw: Option<String> = {
+                    let conn = match mgr.db().pool().get() {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
+                    conn.query_row(
+                        "SELECT pending_phases_json FROM sessions WHERE id = ?1",
+                        [session_id.to_string()],
+                        |r| r.get(0),
+                    )
+                    .ok()
+                    .flatten()
+                };
+                let Some(json) = raw else { continue };
+                let queue: Vec<serde_json::Value> =
+                    serde_json::from_str(&json).unwrap_or_default();
+                let Some(head) = queue.first() else { continue };
+                if head["autonomy"].as_str() == Some("full") {
+                    let _ = advance_next_phase(&mgr, session_id, orch.project_id).await;
+                }
+                // review/manual: leave for operator — approve_phase will advance.
+            }
+        }
+    });
+}
+
 fn topo_sort(phases: &[directive::Phase]) -> Vec<&directive::Phase> {
     use std::collections::{HashMap, HashSet};
     let by_id: HashMap<&str, &directive::Phase> =

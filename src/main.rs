@@ -20,6 +20,7 @@ async fn main() -> Result<()> {
     let db = galvolite::db::Db::open(data_dir.join("galvolite.sqlite"))?;
     let mgr = Arc::new(SessionManager::new(db.clone(), data_dir));
     mgr.start_terminal_reactor();
+    galvolite::plan_executor::start_phase_reactor(Arc::clone(&mgr));
     mgr.start_directive_watchers();
     let _ = mgr.recover_pending_rejoins().await;
 

@@ -52,6 +52,7 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
             get(postmortems::list),
         )
         .route("/api/projects/:id/execute-plan", post(execute_plan::handler))
+        .route("/api/projects/:id/phases/:phase_id/approve", post(execute_plan::approve_phase))
         .route("/api/projects/:id/decisions", get(decisions::list))
         .route("/api/operator/prompt/:id/answer", post(operator::answer))
         .route("/mcp", post(crate::mcp::transport::handle))
