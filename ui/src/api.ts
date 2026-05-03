@@ -176,4 +176,16 @@ export const api = {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     return `${proto}//${window.location.host}/api/sessions/${id}/terminal`;
   },
+
+  executePlan: (projectId: string) =>
+    request<{ spawned: string[] }>(
+      `/api/projects/${projectId}/execute-plan`,
+      { method: "POST", body: "{}" },
+    ),
+
+  approvePhase: (projectId: string, phaseId: string) =>
+    request<{ approved: string }>(
+      `/api/projects/${projectId}/phases/${encodeURIComponent(phaseId)}/approve`,
+      { method: "POST", body: "{}" },
+    ),
 };

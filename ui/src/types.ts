@@ -168,4 +168,6 @@ export type DomainEvent =
       session_id: string;
       children: ChildResolution[];
     }
-  | { type: "directive.changed"; project_id: string };
+  | { type: "directive.changed"; project_id: string }
+  | { type: "phase.review_needed"; project_id: string; phase_id: string }
+  | { type: "phase.advanced"; project_id: string; phase_id: string };
