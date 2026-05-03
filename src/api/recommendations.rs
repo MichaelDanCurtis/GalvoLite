@@ -154,6 +154,41 @@ pub async fn defer_handler(
     }
 }
 
+#[derive(Deserialize)]
+pub struct ExplainReq {
+    pub rec_id: Uuid,
+    pub rationale: String,
+}
+
+/// `POST /api/projects/:id/recommendations/explain` — body
+/// `{ "rec_id": "...", "rationale": "..." }`.
+///
+/// Write-only updater for a rec's rationale text. Status is left alone
+/// (a rec being re-explained remains `pending`). Publishes a
+/// `RecommendationActed` event with `action="explain"` so the dashboard
+/// can refresh the rationale column without a poll. The trigger to
+/// re-prompt Kimi for a better explanation is intentionally deferred —
+/// the Overseer's next periodic tick will refresh rationales naturally
+/// if it discovers better ones.
+pub async fn explain(
+    State(mgr): State<Arc<SessionManager>>,
+    Path(_project_id): Path<Uuid>,
+    Json(req): Json<ExplainReq>,
+) -> Response {
+    match recommendations::update_rationale(mgr.db(), req.rec_id, &req.rationale) {
+        Ok(()) => {
+            mgr.event_bus()
+                .publish(crate::api::events::DomainEvent::RecommendationActed {
+                    rec_id: req.rec_id,
+                    action: "explain".into(),
+                    route: None,
+                });
+            Json(serde_json::json!({"updated": true})).into_response()
+        }
+        Err(e) => crate::api::err_to_response(e),
+    }
+}
+
 /// Build the markdown block injected into the orchestrator's
 /// `pending_overseer_recs`. Format is intentionally human-readable so the
 /// orchestrator's next handoff can paste it into context with no further

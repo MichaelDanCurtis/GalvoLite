@@ -67,6 +67,10 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
             "/api/projects/:id/recommendations/defer",
             post(recommendations::defer_handler),
         )
+        .route(
+            "/api/projects/:id/recommendations/explain",
+            post(recommendations::explain),
+        )
         .route("/api/operator/prompt/:id/answer", post(operator::answer))
         .route("/mcp", post(crate::mcp::transport::handle))
         .layer(CorsLayer::permissive())
