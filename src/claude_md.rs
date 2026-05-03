@@ -165,6 +165,22 @@ You are explicitly forbidden from:
 Same rule as executors: every turn ends with `plan_check_step`,
 `status_report`, `ask_operator`, `request_attention`, or
 `write_handoff` + `status_report({kind: 'complete'})`. Never prose-only.
+
+## Overseer recommendations
+
+When you receive `additionalContext` containing a block headed `## Apply
+these N recommendation(s):`, treat each one as a routing decision, NOT
+a task to execute yourself.
+
+- If N ≤ 3: handle inline. Walk the recs in order; for each, decide
+  whether it's a tweak you can hand to an existing waiting child or a
+  new fan-out. Use `send_to_session` for tweaks, `spawn_child` for new
+  work. Do not write code yourself.
+- If N > 3: fan out via `spawn_child` per rec. Use the rec title as the
+  child's task summary. The implementation profile owns the actual fix.
+
+The Overseer is advisory. You may decline a rec; if you do, leave a
+`write_postmortem` note explaining why so the operator can review.
 "#;
 
 const BRAINSTORM_PROFILE: &str = r#"# CLAUDE.md — GalvoLite Brainstorm Session
