@@ -45,7 +45,7 @@ pub fn on_user_prompt_submit(
         )
         .unwrap_or(0);
 
-    if total * 100 >= CONTEXT_LIMIT * 80 {
+    let warn = if total * 100 >= CONTEXT_LIMIT * 80 {
         Some(format!(
             "Context approaching limit ({total}/{CONTEXT_LIMIT} tokens, {}%). \
              Consider write_handoff before context runs out.",
@@ -53,7 +53,53 @@ pub fn on_user_prompt_submit(
         ))
     } else {
         None
+    };
+
+    // Drain pending_overseer_recs for the project's orchestrator session.
+    //
+    // "Orchestrator" is NOT stored as a role — the DB CHECK constraint at
+    // migrations/0001_initial.sql:20 forbids it (allowed roles are
+    // implementation/brainstorm/scout/fix). Instead we use the same
+    // top-level-session heuristic as `SessionManager::find_orchestrator_for_project`:
+    // most recent non-terminal session for this project with no parent.
+    // If THIS session is that orchestrator, drain its pending recs into
+    // inject_text and clear the field.
+    let orch_id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM sessions
+             WHERE project_id = (SELECT project_id FROM sessions WHERE id = ?1)
+               AND parent_session_id IS NULL
+               AND ended_at IS NULL
+             ORDER BY created_at DESC
+             LIMIT 1",
+            [session_id.to_string()],
+            |r| r.get(0),
+        )
+        .ok();
+
+    if orch_id.as_deref() == Some(session_id.to_string().as_str()) {
+        let pending: Option<String> = conn
+            .query_row(
+                "SELECT pending_overseer_recs FROM sessions WHERE id = ?1",
+                [session_id.to_string()],
+                |r| r.get(0),
+            )
+            .ok()
+            .flatten();
+        if let Some(block) = pending {
+            let _ = conn.execute(
+                "UPDATE sessions SET pending_overseer_recs = NULL WHERE id = ?1",
+                [session_id.to_string()],
+            );
+            let combined = match warn {
+                Some(w) => format!("{w}\n\n{block}"),
+                None => block,
+            };
+            return Some(combined);
+        }
     }
+
+    warn
 }
 
 pub fn on_stop(
