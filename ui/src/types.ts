@@ -170,4 +170,23 @@ export type DomainEvent =
     }
   | { type: "directive.changed"; project_id: string }
   | { type: "phase.review_needed"; project_id: string; phase_id: string }
-  | { type: "phase.advanced"; project_id: string; phase_id: string };
+  | { type: "phase.advanced"; project_id: string; phase_id: string }
+  | { type: "recommendation.created"; rec_id: string; project_id: string; severity: string }
+  | { type: "recommendation.acted"; rec_id: string; action: string; route: string | null }
+  | { type: "overseer.degraded"; project_id: string; reason: string }
+  | { type: "overseer.recovered"; project_id: string };
+
+export interface Recommendation {
+  id: string;
+  project_id: string;
+  kind: string;
+  severity: "info" | "warn" | "urgent";
+  title: string;
+  body: string;
+  rationale: string;
+  evidence_json: unknown;
+  status: "pending" | "acted" | "dismissed" | "deferred";
+  created_at: string;
+  acted_at: string | null;
+  deferred_until: string | null;
+}

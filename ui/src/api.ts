@@ -11,6 +11,7 @@ import type {
   Directive,
   Postmortem,
   Decision,
+  Recommendation,
 } from "./types";
 
 const BASE = "";
@@ -187,5 +188,28 @@ export const api = {
     request<{ approved: string }>(
       `/api/projects/${projectId}/phases/${encodeURIComponent(phaseId)}/approve`,
       { method: "POST", body: "{}" },
+    ),
+
+  listRecs: (projectId: string, status: string = "pending") =>
+    request<Recommendation[]>(
+      `/api/projects/${projectId}/recommendations?status=${status}`,
+    ),
+
+  actRecs: (projectId: string, recIds: string[], action: "make" | "dismiss") =>
+    request<{ results?: { rec_id: string; outcome: string }[]; dismissed?: number }>(
+      `/api/projects/${projectId}/recommendations/act`,
+      { method: "POST", body: JSON.stringify({ rec_ids: recIds, action }) },
+    ),
+
+  deferRec: (projectId: string, recId: string, hours?: number) =>
+    request<{ deferred_until: string }>(
+      `/api/projects/${projectId}/recommendations/defer`,
+      { method: "POST", body: JSON.stringify({ rec_id: recId, ...(hours != null ? { hours } : {}) }) },
+    ),
+
+  explainRec: (projectId: string, recId: string, rationale: string) =>
+    request<{ updated: boolean }>(
+      `/api/projects/${projectId}/recommendations/explain`,
+      { method: "POST", body: JSON.stringify({ rec_id: recId, rationale }) },
     ),
 };
