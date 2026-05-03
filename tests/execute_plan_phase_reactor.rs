@@ -110,6 +110,8 @@ async fn complete_child(app: &common::TestApp, child_id: uuid::Uuid) {
 /// need to confirm children_resolved fired (pending_rejoin set). For the `full`
 /// case we give extra time after that for the reactor's advance to complete.
 async fn wait_for_children_resolved(app: &common::TestApp, orch_id: uuid::Uuid) {
+    // Polling bound: 100 × 20ms = 2s. Failures here mean reactor lag, not logic
+    // — the reactor is async and there's no notification primitive to await on.
     for _ in 0..100 {
         tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
         let conn = app.db.pool().get().unwrap();
@@ -131,6 +133,8 @@ async fn wait_for_children_resolved(app: &common::TestApp, orch_id: uuid::Uuid) 
 /// Used after full-autonomy advance to confirm the reactor actually spawned
 /// the next phase's children.
 async fn wait_for_child_count(app: &common::TestApp, orch_id: uuid::Uuid, min_children: usize) {
+    // Polling bound: 100 × 20ms = 2s. Failures here mean reactor lag, not logic
+    // — the reactor is async and there's no notification primitive to await on.
     for _ in 0..100 {
         tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
         let count = list_children(app, orch_id).len();

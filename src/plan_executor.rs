@@ -17,7 +17,7 @@ pub struct SpawnGraph {
     pub phases: Vec<PhasePlan>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PhasePlan {
     pub id: String,
     pub autonomy: Autonomy,
@@ -156,17 +156,7 @@ fn store_pending_phases(
     orch_id: Uuid,
     remaining: &[PhasePlan],
 ) -> Result<(), crate::error::Error> {
-    let serializable: Vec<_> = remaining.iter().map(|p| serde_json::json!({
-        "id": p.id,
-        "autonomy": match p.autonomy {
-            Autonomy::Full => "full",
-            Autonomy::Review => "review",
-            Autonomy::Manual => "manual",
-        },
-        "depends_on": p.depends_on,
-        "part_titles": p.part_titles,
-    })).collect();
-    let json = serde_json::to_string(&serializable)
+    let json = serde_json::to_string(remaining)
         .map_err(crate::error::Error::EventPayload)?;
     let conn = db.pool().get()?;
     conn.execute(
@@ -187,6 +177,9 @@ pub async fn advance_next_phase(
     orch_id: Uuid,
     project_id: Uuid,
 ) -> Result<bool, crate::error::Error> {
+    let lock = mgr.phase_advancement_lock();
+    let _guard = lock.lock().await;
+
     let bus = mgr.event_bus().clone();
     let raw: Option<String> = {
         let conn = mgr.db().pool().get()?;
@@ -199,23 +192,11 @@ pub async fn advance_next_phase(
         .flatten()
     };
     let Some(json) = raw else { return Ok(false); };
-    let mut queue: Vec<serde_json::Value> =
-        serde_json::from_str(&json).unwrap_or_default();
+    let mut queue: Vec<PhasePlan> = serde_json::from_str(&json).unwrap_or_default();
     if queue.is_empty() {
         return Ok(false);
     }
-    let head = queue.remove(0);
-    let phase = PhasePlan {
-        id: head["id"].as_str().unwrap_or("").to_string(),
-        autonomy: match head["autonomy"].as_str().unwrap_or("manual") {
-            "full" => Autonomy::Full,
-            "review" => Autonomy::Review,
-            _ => Autonomy::Manual,
-        },
-        depends_on: vec![],
-        part_titles: serde_json::from_value(head["part_titles"].clone())
-            .unwrap_or_default(),
-    };
+    let phase = queue.remove(0);
     let orch = mgr.db().get_session(orch_id)?;
     let kids = spawn_phase(mgr, &orch, &phase).await?;
 
@@ -253,41 +234,55 @@ pub async fn advance_next_phase(
 pub fn start_phase_reactor(mgr: Arc<SessionManager>) {
     let mut rx = mgr.event_bus().subscribe();
     tokio::spawn(async move {
-        while let Ok(ev) = rx.recv().await {
-            if let DomainEvent::SessionChildrenResolved { session_id, .. } = ev {
-                // Fetch the session and apply the orchestrator heuristic:
-                // top-level (no parent) + still alive (ended_at IS NULL).
-                // The DB CHECK constraint does not allow "orchestrator" as a
-                // role value — this is a runtime profile, not a stored role.
-                let orch = match mgr.db().get_session(session_id) {
-                    Ok(s) => s,
-                    Err(_) => continue,
-                };
-                if !(orch.parent_session_id.is_none() && orch.ended_at.is_none()) {
+        loop {
+            match rx.recv().await {
+                Ok(ev) => {
+                    if let DomainEvent::SessionChildrenResolved { session_id, .. } = ev {
+                        // Fetch the session and apply the orchestrator heuristic:
+                        // top-level (no parent) + still alive (ended_at IS NULL).
+                        // The DB CHECK constraint does not allow "orchestrator" as a
+                        // role value — this is a runtime profile, not a stored role.
+                        let orch = match mgr.db().get_session(session_id) {
+                            Ok(s) => s,
+                            Err(_) => continue,
+                        };
+                        if !(orch.parent_session_id.is_none() && orch.ended_at.is_none()) {
+                            continue;
+                        }
+                        // Peek at queue head to decide whether to auto-advance.
+                        let raw: Option<String> = {
+                            let conn = match mgr.db().pool().get() {
+                                Ok(c) => c,
+                                Err(_) => continue,
+                            };
+                            conn.query_row(
+                                "SELECT pending_phases_json FROM sessions WHERE id = ?1",
+                                [session_id.to_string()],
+                                |r| r.get(0),
+                            )
+                            .ok()
+                            .flatten()
+                        };
+                        let Some(json) = raw else { continue };
+                        let queue: Vec<PhasePlan> =
+                            serde_json::from_str(&json).unwrap_or_default();
+                        let Some(head) = queue.first() else { continue };
+                        if head.autonomy == Autonomy::Full {
+                            if let Err(e) = advance_next_phase(&mgr, session_id, orch.project_id).await {
+                                tracing::error!(error = ?e, orch_id = %session_id, "phase reactor: advance_next_phase failed");
+                            }
+                        }
+                        // review/manual: leave for operator — approve_phase will advance.
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(n, "phase reactor: lagged, dropped {n} events");
                     continue;
                 }
-                // Peek at queue head to decide whether to auto-advance.
-                let raw: Option<String> = {
-                    let conn = match mgr.db().pool().get() {
-                        Ok(c) => c,
-                        Err(_) => continue,
-                    };
-                    conn.query_row(
-                        "SELECT pending_phases_json FROM sessions WHERE id = ?1",
-                        [session_id.to_string()],
-                        |r| r.get(0),
-                    )
-                    .ok()
-                    .flatten()
-                };
-                let Some(json) = raw else { continue };
-                let queue: Vec<serde_json::Value> =
-                    serde_json::from_str(&json).unwrap_or_default();
-                let Some(head) = queue.first() else { continue };
-                if head["autonomy"].as_str() == Some("full") {
-                    let _ = advance_next_phase(&mgr, session_id, orch.project_id).await;
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    tracing::warn!("phase reactor: bus closed, exiting");
+                    break;
                 }
-                // review/manual: leave for operator — approve_phase will advance.
             }
         }
     });

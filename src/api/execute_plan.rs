@@ -7,7 +7,7 @@ use axum::{
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::plan_executor::{execute_plan, ExecuteError};
+use crate::plan_executor::{execute_plan, ExecuteError, PhasePlan};
 use crate::session_manager::SessionManager;
 
 pub async fn handler(
@@ -71,10 +71,10 @@ pub async fn approve_phase(
         .ok()
         .flatten()
     };
-    let queue: Vec<serde_json::Value> = raw
+    let queue: Vec<PhasePlan> = raw
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    if queue.first().and_then(|p| p["id"].as_str()) != Some(phase_id.as_str()) {
+    if queue.first().map(|p| p.id.as_str()) != Some(phase_id.as_str()) {
         return (StatusCode::CONFLICT, "phase is not next in queue").into_response();
     }
     match crate::plan_executor::advance_next_phase(&mgr, orch.id, project_id).await {

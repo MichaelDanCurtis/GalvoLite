@@ -26,7 +26,7 @@ pub struct Phase {
     pub depends_on: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Autonomy {
     Full,

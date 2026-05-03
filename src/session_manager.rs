@@ -49,6 +49,13 @@ pub struct SessionManager {
     /// by `start_directive_watchers` (startup) and `add_project` (live add),
     /// drained by `delete_project`.
     project_watchers: StdMutex<HashMap<Uuid, crate::directive_watcher::WatcherHandle>>,
+    /// Coarse serialisation lock for phase advancement. Held by
+    /// `advance_next_phase` for the full peek→pop→spawn→UPDATE→publish
+    /// sequence. Prevents TOCTOU races between the phase reactor and the
+    /// operator `approve_phase` path. One lock per `SessionManager` (≈ per
+    /// running process); phase advancement is low-frequency so contention is
+    /// negligible.
+    phase_advancement_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl SessionManager {
@@ -83,6 +90,7 @@ impl SessionManager {
             event_bus,
             operator_registry: OperatorPromptRegistry::new(),
             project_watchers: StdMutex::new(HashMap::new()),
+            phase_advancement_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -108,6 +116,13 @@ impl SessionManager {
 
     pub fn db(&self) -> &Db {
         &self.db
+    }
+
+    /// Arc-clone of the phase-advancement lock. Both the phase reactor and the
+    /// `approve_phase` handler acquire this before any peek/pop/spawn sequence
+    /// to prevent TOCTOU double-advance.
+    pub fn phase_advancement_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(&self.phase_advancement_lock)
     }
 
     /// Access the MCP tool registry built at startup.
@@ -1055,6 +1070,7 @@ impl SessionManager {
     ///
     /// Idempotent: replays `on_child_terminal` for already-terminal children;
     /// `on_child_terminal` is itself idempotent so repeat calls are safe.
+
     /// Find the most recent non-terminal top-level session for a project.
     /// "Orchestrator" here means a session with no parent — the user-facing
     /// root that may spawn children. The DB schema does not store
