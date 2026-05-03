@@ -121,6 +121,39 @@ pub async fn act(
     (StatusCode::BAD_REQUEST, "action must be 'make' or 'dismiss'").into_response()
 }
 
+#[derive(Deserialize)]
+pub struct DeferReq {
+    pub rec_id: Uuid,
+    pub hours: Option<i64>,
+}
+
+/// `POST /api/projects/:id/recommendations/defer` — body
+/// `{ "rec_id": "...", "hours": <i64?> }`.
+///
+/// Sets the rec's status to `deferred` with `deferred_until = now + hours`
+/// (default 24). The cron sweep in `main.rs` resurfaces deferred recs once
+/// `deferred_until` has elapsed. Publishes a `RecommendationActed` event with
+/// `action="defer"` (no route — defer never injects into an orchestrator).
+pub async fn defer_handler(
+    State(mgr): State<Arc<SessionManager>>,
+    Path(_project_id): Path<Uuid>,
+    Json(req): Json<DeferReq>,
+) -> Response {
+    let until = chrono::Utc::now() + chrono::Duration::hours(req.hours.unwrap_or(24));
+    match recommendations::defer(mgr.db(), req.rec_id, until) {
+        Ok(()) => {
+            mgr.event_bus()
+                .publish(crate::api::events::DomainEvent::RecommendationActed {
+                    rec_id: req.rec_id,
+                    action: "defer".into(),
+                    route: None,
+                });
+            Json(serde_json::json!({"deferred_until": until.to_rfc3339()})).into_response()
+        }
+        Err(e) => crate::api::err_to_response(e),
+    }
+}
+
 /// Build the markdown block injected into the orchestrator's
 /// `pending_overseer_recs`. Format is intentionally human-readable so the
 /// orchestrator's next handoff can paste it into context with no further

@@ -30,6 +30,24 @@ async fn main() -> Result<()> {
         // supervisor has no Drop semantics to worry about.
         Box::leak(Box::new(sup));
     }
+    // Plan 8 Task 15 — recommendations sweep: every 5 minutes, flip any
+    // `deferred` recs whose `deferred_until` has elapsed back to `pending`.
+    // Runs unconditionally (harmless when Overseer is disabled — there will
+    // simply be nothing to resurface).
+    {
+        let mgr = Arc::clone(&mgr);
+        tokio::spawn(async move {
+            let mut t = tokio::time::interval(std::time::Duration::from_secs(300));
+            t.tick().await;
+            loop {
+                t.tick().await;
+                let _ = galvolite::recommendations::resurface_expired(
+                    mgr.db(),
+                    chrono::Utc::now(),
+                );
+            }
+        });
+    }
     mgr.start_directive_watchers();
     let _ = mgr.recover_pending_rejoins().await;
 
