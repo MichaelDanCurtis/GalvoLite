@@ -13,6 +13,7 @@ pub mod directive;
 pub mod operator;
 pub mod plan;
 pub mod postmortems;
+pub mod recommendations;
 pub mod spawn;
 
 use crate::session_manager::SessionManager;
@@ -54,6 +55,10 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route("/api/projects/:id/execute-plan", post(execute_plan::handler))
         .route("/api/projects/:id/phases/:phase_id/approve", post(execute_plan::approve_phase))
         .route("/api/projects/:id/decisions", get(decisions::list))
+        .route(
+            "/api/projects/:id/recommendations",
+            get(recommendations::list),
+        )
         .route("/api/operator/prompt/:id/answer", post(operator::answer))
         .route("/mcp", post(crate::mcp::transport::handle))
         .layer(CorsLayer::permissive())
