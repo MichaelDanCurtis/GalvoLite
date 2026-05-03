@@ -94,3 +94,88 @@ fn extract_json_block(s: &str) -> Option<&str> {
     }
     None
 }
+
+
+use crate::api::events::{DomainEvent, EventBroadcaster};
+use crate::db::Db;
+use crate::recommendations::{insert, NewRec};
+use std::future::Future;
+use uuid::Uuid;
+
+pub struct OverseerState {
+    pub daily_budget: u64,
+    pub tokens_used: u64,
+    pub consecutive_failures: u32,
+    pub degraded: bool,
+}
+
+impl OverseerState {
+    pub fn new(daily_budget: u64) -> Self {
+        Self { daily_budget, tokens_used: 0, consecutive_failures: 0, degraded: false }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ReviewError {
+    #[error("budget exhausted ({used}/{budget})")] Budget { used: u64, budget: u64 },
+    #[error("kimi: {0}")] Kimi(#[from] crate::overseer::kimi::KimiError),
+    #[error("db: {0}")] Db(#[from] crate::error::Error),
+}
+
+/// Run one review cycle. `kimi_call` is a closure injected for testability —
+/// in production it wraps `KimiClient::chat`.
+pub async fn review<F, Fut>(
+    db: &Db,
+    bus: &EventBroadcaster,
+    project_id: Uuid,
+    snap: &ContextSnapshot,
+    state: &mut OverseerState,
+    kimi_call: F,
+) -> Result<usize, ReviewError>
+where
+    F: FnOnce(String, String) -> Fut,
+    Fut: Future<Output = Result<(String, u64), crate::overseer::kimi::KimiError>>,
+{
+    if state.tokens_used >= state.daily_budget {
+        return Err(ReviewError::Budget { used: state.tokens_used, budget: state.daily_budget });
+    }
+    let (sys, user) = pack_prompt(snap);
+    match kimi_call(sys, user).await {
+        Ok((text, tokens)) => {
+            state.tokens_used = state.tokens_used.saturating_add(tokens);
+            if state.degraded {
+                bus.publish(DomainEvent::OverseerRecovered { project_id });
+                state.degraded = false;
+            }
+            state.consecutive_failures = 0;
+            let recs = parse_kimi_response(&text).unwrap_or_default();
+            let mut inserted = 0;
+            for r in recs {
+                let nr = NewRec {
+                    project_id,
+                    kind: r.kind, severity: r.severity, title: r.title,
+                    body: r.body, rationale: r.rationale,
+                    evidence_json: serde_json::Value::Array(r.evidence_refs),
+                };
+                let sev = nr.severity.clone();
+                if let Some(id) = insert(db, nr)? {
+                    bus.publish(DomainEvent::RecommendationCreated {
+                        rec_id: id, project_id, severity: sev,
+                    });
+                    inserted += 1;
+                }
+            }
+            Ok(inserted)
+        }
+        Err(e) => {
+            state.consecutive_failures += 1;
+            if state.consecutive_failures >= 5 && !state.degraded {
+                bus.publish(DomainEvent::OverseerDegraded {
+                    project_id, reason: format!("{e}"),
+                });
+                state.degraded = true;
+            }
+            Err(ReviewError::Kimi(e))
+        }
+    }
+}
