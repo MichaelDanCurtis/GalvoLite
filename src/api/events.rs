@@ -87,6 +87,8 @@ pub enum DomainEvent {
     PhaseAdvanced { project_id: Uuid, phase_id: String },
     #[serde(rename = "recommendation.created")]
     RecommendationCreated { rec_id: Uuid, project_id: Uuid, severity: String },
+    #[serde(rename = "recommendation.acted")]
+    RecommendationActed { rec_id: Uuid, action: String, route: Option<Uuid> },
     #[serde(rename = "overseer.degraded")]
     OverseerDegraded { project_id: Uuid, reason: String },
     #[serde(rename = "overseer.recovered")]
@@ -147,6 +149,7 @@ impl DomainEvent {
             | DomainEvent::PhaseReviewNeeded { .. }
             | DomainEvent::PhaseAdvanced { .. }
             | DomainEvent::RecommendationCreated { .. }
+            | DomainEvent::RecommendationActed { .. }
             | DomainEvent::OverseerDegraded { .. }
             | DomainEvent::OverseerRecovered { .. } => false,
         }

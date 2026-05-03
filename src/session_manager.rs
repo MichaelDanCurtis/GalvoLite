@@ -1085,6 +1085,28 @@ impl SessionManager {
             .max_by_key(|s| s.created_at)
     }
 
+    /// Append a block to `pending_overseer_recs` for a session. Concatenates
+    /// with `\n\n---\n\n` if there is existing content (append-only — never
+    /// silently overwrites). Used by the recommendations `act` endpoint when
+    /// the operator chooses "Make" to inject Overseer-surfaced recs into the
+    /// orchestrator's next handoff.
+    pub fn append_pending_overseer_recs(&self, session_id: Uuid, block: &str) -> Result<()> {
+        let conn = self.db.pool().get()?;
+        let prior: Option<String> = conn.query_row(
+            "SELECT pending_overseer_recs FROM sessions WHERE id = ?1",
+            [session_id.to_string()], |r| r.get(0),
+        ).ok().flatten();
+        let merged = match prior {
+            Some(p) if !p.is_empty() => format!("{p}\n\n---\n\n{block}"),
+            _ => block.to_string(),
+        };
+        conn.execute(
+            "UPDATE sessions SET pending_overseer_recs = ?1 WHERE id = ?2",
+            rusqlite::params![merged, session_id.to_string()],
+        )?;
+        Ok(())
+    }
+
     pub async fn recover_pending_rejoins(&self) -> Result<()> {
         let parents: Vec<(String, String)> = {
             let conn = self.db.pool().get()?;
