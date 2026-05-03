@@ -21,6 +21,15 @@ async fn main() -> Result<()> {
     let mgr = Arc::new(SessionManager::new(db.clone(), data_dir));
     mgr.start_terminal_reactor();
     galvolite::plan_executor::start_phase_reactor(Arc::clone(&mgr));
+    if galvolite::overseer::config::overseer_enabled() {
+        let sup = galvolite::overseer::OverseerSupervisor::new(Arc::clone(&mgr));
+        sup.spawn_for_existing_projects().await;
+        // Intentional: the supervisor must outlive `main()` for the reconcile
+        // loop's `Arc` clones to keep the shared state alive. Box::leak is the
+        // minimal viable container here — there is no global registry, and the
+        // supervisor has no Drop semantics to worry about.
+        Box::leak(Box::new(sup));
+    }
     mgr.start_directive_watchers();
     let _ = mgr.recover_pending_rejoins().await;
 
