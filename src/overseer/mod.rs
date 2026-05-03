@@ -3,3 +3,4 @@
 
 pub mod config;
 pub mod kimi;
+pub mod observer;
