@@ -17,6 +17,7 @@ pub mod hooks;
 pub mod mcp;
 pub mod overseer;
 pub mod pty;
+pub mod recommendations;
 pub mod ritual;
 pub mod session_manager;
 pub mod session_registry;
