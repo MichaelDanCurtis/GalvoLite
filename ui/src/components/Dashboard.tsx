@@ -15,6 +15,9 @@ import { SendModal } from "./modals/SendModal";
 import { HandoffModal } from "./modals/HandoffModal";
 import { EndSessionModal } from "./modals/EndSessionModal";
 import { PostmortemsPanel } from "./PostmortemsPanel";
+import { RecBell } from "./RecBell";
+import { RecModal } from "./RecModal";
+import { ExecutePlanButton } from "./ExecutePlanButton";
 import type { Project, DomainEvent, Session } from "../types";
 
 function SessionEventBridge({
@@ -50,10 +53,14 @@ export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
   const [removeTarget, setRemoveTarget] = useState<Project | null>(null);
   const { expandedId, expand, collapse } = useExpandedSession();
   const [modal, setModal] = useState<null | "send" | "handoff" | "end">(null);
+  const [recModalOpen, setRecModalOpen] = useState(false);
+  const [overseerDegraded, setOverseerDegraded] = useState(false);
 
   const bridgeHandler = useCallback(
     (e: DomainEvent) => {
       applyEvent(e);
+      if (e.type === "overseer.degraded") setOverseerDegraded(true);
+      if (e.type === "overseer.recovered") setOverseerDegraded(false);
       onGlobalEvent?.(e);
     },
     [applyEvent, onGlobalEvent],
@@ -125,6 +132,21 @@ export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
               projectId={selectedProject}
               onSpawn={() => setStartOpen(true)}
             />
+          )}
+          {selectedProject && (
+            <>
+              <ExecutePlanButton projectId={selectedProject} />
+              <RecBell
+                projectId={selectedProject}
+                degraded={overseerDegraded}
+                onOpen={() => setRecModalOpen(true)}
+              />
+              <RecModal
+                projectId={selectedProject}
+                open={recModalOpen}
+                onClose={() => setRecModalOpen(false)}
+              />
+            </>
           )}
         </div>
         <div className="flex items-center gap-4 text-sm">
