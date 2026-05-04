@@ -156,7 +156,7 @@ async fn run_overseer_loop(
         }
         let bus = mgr.event_bus().clone();
         let kc = &kimi;
-        let _ = crate::overseer::recommender::review(
+        if let Err(e) = crate::overseer::recommender::review(
             mgr.db(),
             &bus,
             project_id,
@@ -164,6 +164,13 @@ async fn run_overseer_loop(
             &mut state,
             move |s, u| async move { kc.chat(&s, &u).await },
         )
-        .await;
+        .await
+        {
+            tracing::warn!(
+                project_id = %project_id,
+                error = ?e,
+                "overseer review failed"
+            );
+        }
     }
 }
