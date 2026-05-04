@@ -67,7 +67,7 @@ impl OverseerSupervisor {
         for p in projects {
             self.spawn_one(p.id, cfg.clone());
         }
-        self.start_lifecycle_listener();
+        self.start_lifecycle_listener(cfg);
     }
 
     /// Spawn an Overseer task for `project_id` if one is not already running.
@@ -82,12 +82,15 @@ impl OverseerSupervisor {
         t.insert(project_id, handle);
     }
 
-    /// Spawn the reconcile loop. The loop owns clones of `mgr` + `tasks` and
-    /// runs for the lifetime of the process. Compares the live project set
-    /// against tracked tasks and aborts handles for vanished projects.
-    fn start_lifecycle_listener(&self) {
-        let mgr = Arc::clone(&self.mgr);
-        let tasks = Arc::clone(&self.tasks);
+    /// Spawn the reconcile loop and the bus listener. The reconcile loop owns
+    /// clones of `mgr` + `tasks` and runs for the lifetime of the process —
+    /// it compares the live project set against tracked tasks and aborts
+    /// handles for vanished projects. The bus listener subscribes to
+    /// `ProjectAdded` events so projects added after startup get an Overseer
+    /// task without requiring a server restart.
+    fn start_lifecycle_listener(&self, cfg: crate::overseer::config::OverseerConfig) {
+        let mgr_recon = Arc::clone(&self.mgr);
+        let tasks_recon = Arc::clone(&self.tasks);
         let interval = self.reconcile_interval;
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);
@@ -97,14 +100,14 @@ impl OverseerSupervisor {
             ticker.tick().await;
             loop {
                 ticker.tick().await;
-                let live: std::collections::HashSet<Uuid> = mgr
+                let live: std::collections::HashSet<Uuid> = mgr_recon
                     .db()
                     .list_projects()
                     .unwrap_or_default()
                     .into_iter()
                     .map(|p| p.id)
                     .collect();
-                let mut t = tasks.lock().unwrap();
+                let mut t = tasks_recon.lock().unwrap();
                 t.retain(|pid, h| {
                     if !live.contains(pid) {
                         h.abort();
@@ -113,6 +116,29 @@ impl OverseerSupervisor {
                         true
                     }
                 });
+            }
+        });
+
+        let mgr_bus = Arc::clone(&self.mgr);
+        let tasks_bus = Arc::clone(&self.tasks);
+        let mut rx = self.mgr.event_bus().subscribe();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(crate::api::events::DomainEvent::ProjectAdded { project_id }) => {
+                        let mut t = tasks_bus.lock().unwrap();
+                        if t.contains_key(&project_id) {
+                            continue;
+                        }
+                        let mgr = Arc::clone(&mgr_bus);
+                        let handle =
+                            tokio::spawn(run_overseer_loop(mgr, project_id, cfg.clone()));
+                        t.insert(project_id, handle);
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
             }
         });
     }

@@ -81,6 +81,26 @@ async fn start_spawns_one_task_per_existing_project() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn project_added_after_start_spawns_task() {
+    enable_overseer_env();
+    let app = common::test_app_with_bus();
+
+    let sup = OverseerSupervisor::new(Arc::clone(&app.mgr));
+    sup.spawn_for_existing_projects().await;
+    assert_eq!(sup.task_count(), 0);
+
+    let (_d, _p) = make_project(&app, "added-late");
+
+    // Bus listener spawned the task; ProjectAdded fan-out is async, so allow
+    // a few scheduler ticks before checking.
+    for _ in 0..20 {
+        if sup.task_count() == 1 { break; }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(sup.task_count(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn project_deleted_drops_task() {
     enable_overseer_env();
     let app = common::test_app_with_bus();

@@ -594,6 +594,9 @@ impl SessionManager {
         new.path = canonical;
         let project = self.db.insert_project(new)?;
         self.spawn_watcher(project.id, std::path::Path::new(&project.path));
+        self.event_bus().publish(
+            crate::api::events::DomainEvent::ProjectAdded { project_id: project.id },
+        );
         Ok(project)
     }
 
