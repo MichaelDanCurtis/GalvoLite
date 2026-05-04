@@ -59,11 +59,17 @@ export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
   const bridgeHandler = useCallback(
     (e: DomainEvent) => {
       applyEvent(e);
+      if (
+        e.type === "session.event_appended" &&
+        e.kind === "mcp.spawn_session"
+      ) {
+        refresh();
+      }
       if (e.type === "overseer.degraded") setOverseerDegraded(true);
       if (e.type === "overseer.recovered") setOverseerDegraded(false);
       onGlobalEvent?.(e);
     },
-    [applyEvent, onGlobalEvent],
+    [applyEvent, refresh, onGlobalEvent],
   );
 
   const filtered = selectedProject
