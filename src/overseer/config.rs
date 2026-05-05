@@ -1,8 +1,8 @@
 //! Env-config helpers for Overseer + Plan Executor feature flags
 //! and Kimi K2 API credentials.
 
-const DEFAULT_KIMI_BASE_URL: &str = "https://api.moonshot.cn/v1";
-const DEFAULT_KIMI_MODEL: &str = "kimi-k2-0711-preview";
+const DEFAULT_KIMI_BASE_URL: &str = "https://api.kimi.com/coding/v1";
+const DEFAULT_KIMI_MODEL: &str = "kimi-for-coding";
 const DEFAULT_DAILY_TOKEN_BUDGET: u64 = 100_000;
 
 pub fn overseer_enabled() -> bool {

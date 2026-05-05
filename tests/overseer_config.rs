@@ -36,9 +36,11 @@ fn config_from_env_uses_default_base_url_when_only_key_set() {
     let _lock = MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("KIMI_API_KEY", "k");
     std::env::remove_var("KIMI_BASE_URL");
+    std::env::remove_var("KIMI_MODEL");
     let c = OverseerConfig::from_env().unwrap();
     assert_eq!(c.api_key, "k");
-    assert_eq!(c.base_url, "https://api.moonshot.cn/v1");
+    assert_eq!(c.base_url, "https://api.kimi.com/coding/v1");
+    assert_eq!(c.model, "kimi-for-coding");
     assert_eq!(c.daily_token_budget, 100_000);
     std::env::remove_var("KIMI_API_KEY");
 }
