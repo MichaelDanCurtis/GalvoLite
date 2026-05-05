@@ -13,6 +13,7 @@ pub enum KimiError {
 pub struct KimiClient {
     api_key: String,
     base_url: String,
+    model: String,
     http: reqwest::Client,
 }
 
@@ -39,10 +40,11 @@ struct ChoiceMessage { content: String }
 struct Usage { total_tokens: u64 }
 
 impl KimiClient {
-    pub fn new(api_key: &str, base_url: &str) -> Self {
+    pub fn new(api_key: &str, base_url: &str, model: &str) -> Self {
         Self {
             api_key: api_key.to_string(),
             base_url: base_url.trim_end_matches('/').to_string(),
+            model: model.to_string(),
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build().unwrap(),
@@ -51,7 +53,7 @@ impl KimiClient {
 
     pub async fn chat(&self, system: &str, user: &str) -> Result<(String, u64), KimiError> {
         let body = ChatReq {
-            model: "kimi-k2-0711-preview",
+            model: &self.model,
             messages: vec![
                 ChatMsg { role: "system", content: system },
                 ChatMsg { role: "user",   content: user   },

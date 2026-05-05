@@ -2,6 +2,7 @@
 //! and Kimi K2 API credentials.
 
 const DEFAULT_KIMI_BASE_URL: &str = "https://api.moonshot.cn/v1";
+const DEFAULT_KIMI_MODEL: &str = "kimi-k2-0711-preview";
 const DEFAULT_DAILY_TOKEN_BUDGET: u64 = 100_000;
 
 pub fn overseer_enabled() -> bool {
@@ -20,6 +21,7 @@ fn truthy(v: Option<&str>) -> bool {
 pub struct OverseerConfig {
     pub api_key: String,
     pub base_url: String,
+    pub model: String,
     pub daily_token_budget: u64,
 }
 
@@ -28,9 +30,11 @@ impl OverseerConfig {
         let api_key = std::env::var("KIMI_API_KEY").ok()?;
         let base_url = std::env::var("KIMI_BASE_URL")
             .unwrap_or_else(|_| DEFAULT_KIMI_BASE_URL.to_string());
+        let model = std::env::var("KIMI_MODEL")
+            .unwrap_or_else(|_| DEFAULT_KIMI_MODEL.to_string());
         let daily_token_budget = std::env::var("KIMI_DAILY_TOKEN_BUDGET")
             .ok().and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_DAILY_TOKEN_BUDGET);
-        Some(Self { api_key, base_url, daily_token_budget })
+        Some(Self { api_key, base_url, model, daily_token_budget })
     }
 }

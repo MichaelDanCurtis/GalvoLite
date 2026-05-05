@@ -11,7 +11,7 @@ async fn happy_path_returns_text() {
                        "usage":{"total_tokens":42}}"#)
         .create_async().await;
 
-    let c = KimiClient::new("test-key", &server.url());
+    let c = KimiClient::new("test-key", &server.url(), "test-model");
     let (text, tokens) = c.chat("system", "user").await.unwrap();
     assert_eq!(text, "hello");
     assert_eq!(tokens, 42);
@@ -22,7 +22,7 @@ async fn happy_path_returns_text() {
 async fn http_5xx_returns_transient_error() {
     let mut server = mockito::Server::new_async().await;
     server.mock("POST", "/chat/completions").with_status(503).create_async().await;
-    let c = KimiClient::new("k", &server.url());
+    let c = KimiClient::new("k", &server.url(), "test-model");
     let err = c.chat("s", "u").await.unwrap_err();
     assert!(matches!(err, KimiError::Transient(_)));
 }

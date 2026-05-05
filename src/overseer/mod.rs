@@ -157,7 +157,7 @@ async fn run_overseer_loop(
         project_id,
         mgr.event_bus().subscribe(),
     );
-    let kimi = crate::overseer::kimi::KimiClient::new(&cfg.api_key, &cfg.base_url);
+    let kimi = crate::overseer::kimi::KimiClient::new(&cfg.api_key, &cfg.base_url, &cfg.model);
 
     let mut interval = tokio::time::interval(Duration::from_secs(30));
     let mut periodic = tokio::time::interval(Duration::from_secs(600));
