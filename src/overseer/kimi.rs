@@ -46,7 +46,7 @@ impl KimiClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
             http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(120))
                 .user_agent("KimiCLI/1.41.0")
                 .build().unwrap(),
         }
