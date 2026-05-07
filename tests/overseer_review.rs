@@ -88,6 +88,22 @@ fn pack_prompt_omits_pty_section_when_map_empty() {
 }
 
 #[test]
+fn pack_prompt_handles_non_ascii_pty_tail_without_panic() {
+    use galvolite::overseer::observer::ContextSnapshot;
+    let mut snap = ContextSnapshot::default();
+    let sid = uuid::Uuid::new_v4();
+    // Build a tail that exceeds the 800-char cap with multi-byte chars
+    // straddling the boundary (each ✓ is 3 bytes in UTF-8).
+    let tail = "✓".repeat(400);
+    snap.tail_per_session.insert(sid, tail);
+
+    // Should not panic.
+    let (_, user) = galvolite::overseer::recommender::pack_prompt(&snap);
+    assert!(user.contains("# Recent PTY tails"));
+    assert!(user.contains("…(truncated)"), "expected truncation marker");
+}
+
+#[test]
 fn budget_resets_at_utc_date_rollover() {
     use galvolite::overseer::recommender::OverseerState;
 

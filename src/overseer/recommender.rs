@@ -59,7 +59,19 @@ pub fn pack_prompt(snap: &ContextSnapshot) -> (String, String) {
 }
 
 fn push_capped(out: &mut String, s: &str, cap: usize) {
-    if s.len() <= cap { out.push_str(s); } else { out.push_str(&s[..cap]); out.push_str("\n…(truncated)\n"); }
+    if s.len() <= cap {
+        out.push_str(s);
+    } else {
+        // Walk back to a UTF-8 boundary at or below `cap` so we never
+        // slice mid-codepoint (panic) when content includes non-ASCII
+        // bytes (e.g. rendered PTY tails).
+        let mut cut = cap;
+        while !s.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        out.push_str(&s[..cut]);
+        out.push_str("\n…(truncated)\n");
+    }
 }
 
 fn first_line(s: &str) -> &str { s.lines().next().unwrap_or("") }

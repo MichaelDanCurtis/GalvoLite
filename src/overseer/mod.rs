@@ -89,8 +89,10 @@ impl OverseerSupervisor {
     /// clones of `mgr` + `tasks` and runs for the lifetime of the process —
     /// it compares the live project set against tracked tasks and aborts
     /// handles for vanished projects. The bus listener subscribes to
-    /// `ProjectAdded` events so projects added after startup get an Overseer
-    /// task without requiring a server restart.
+    /// `ProjectAdded` and `ProjectDeleted` events: the former spawns a task
+    /// for projects added after startup; the latter aborts and removes the
+    /// task for projects deleted at runtime, without requiring a server
+    /// restart.
     fn start_lifecycle_listener(&self, cfg: crate::overseer::config::OverseerConfig) {
         let mgr_recon = Arc::clone(&self.mgr);
         let tasks_recon = Arc::clone(&self.tasks);
