@@ -23,12 +23,14 @@ function RecActions({
   busy,
   setBusy,
   onChanged,
+  onDeferred,
 }: {
   projectId: string;
   rec: Recommendation;
   busy: boolean;
   setBusy: (b: boolean) => void;
   onChanged: (next: Recommendation) => void;
+  onDeferred: () => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
@@ -40,7 +42,7 @@ function RecActions({
         onClick={async () => {
           setBusy(true);
           await api.deferRec(projectId, rec.id);
-          // Caller refetches the list; nothing to replace here.
+          await onDeferred();
           setBusy(false);
         }}
       >Defer</button>
@@ -160,6 +162,7 @@ export function RecModal({ projectId, open, onClose }: Props) {
                   busy={busy}
                   setBusy={setBusy}
                   onChanged={(next) => setRecs((rs) => rs.map((x) => (x.id === next.id ? next : x)))}
+                  onDeferred={refresh}
                 />
               )}
             </div>

@@ -85,6 +85,30 @@ describe("RecModal", () => {
     expect(listRecs).toHaveBeenCalledWith("p", "deferred");
   });
 
+  it("defer triggers a refetch via onDeferred callback", async () => {
+    const listRecs = vi.fn().mockResolvedValue([{
+      id: "r1", project_id: "p", kind: "k", severity: "info", title: "X-rec",
+      body: "B", rationale: "R", status: "pending",
+      created_at: "2026-01-01T00:00:00Z", acted_at: null, deferred_until: null,
+      evidence_json: null,
+    }]);
+    vi.spyOn(api, "listRecs").mockImplementation(listRecs);
+    vi.spyOn(api, "deferRec").mockResolvedValue({ deferred_until: "2026-01-02T00:00:00Z" });
+
+    render(<RecModal projectId="p" open={true} onClose={() => {}} />);
+    await screen.findByText("X-rec");
+
+    // Initial mount calls listRecs once with status=pending.
+    expect(listRecs).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /^defer$/i }));
+
+    await waitFor(() => {
+      // Defer should trigger one more listRecs call (the refresh).
+      expect(listRecs).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("re-explain replaces rationale on success", async () => {
     const explainRec = vi.fn().mockResolvedValue({ updated: true });
     vi.spyOn(api, "explainRec").mockImplementation(explainRec);
