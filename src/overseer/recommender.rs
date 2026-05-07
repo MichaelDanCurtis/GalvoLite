@@ -120,11 +120,39 @@ pub struct OverseerState {
     pub tokens_used: u64,
     pub consecutive_failures: u32,
     pub degraded: bool,
+    /// Plan 9 Task 5 — last UTC date the counter was reset.
+    pub last_reset_utc: chrono::NaiveDate,
 }
 
 impl OverseerState {
     pub fn new(daily_budget: u64) -> Self {
-        Self { daily_budget, tokens_used: 0, consecutive_failures: 0, degraded: false }
+        Self {
+            daily_budget,
+            tokens_used: 0,
+            consecutive_failures: 0,
+            degraded: false,
+            last_reset_utc: chrono::Utc::now().date_naive(),
+        }
+    }
+
+    /// True when the running counter has hit (or exceeded) the budget.
+    pub fn is_budget_exhausted(&self) -> bool {
+        self.tokens_used >= self.daily_budget
+    }
+
+    /// Reset the counter when the UTC date has advanced past
+    /// `last_reset_utc`. Called from `review` before the budget check.
+    pub fn maybe_reset_for_today(&mut self) {
+        let today = chrono::Utc::now().date_naive();
+        if today > self.last_reset_utc {
+            self.tokens_used = 0;
+            self.last_reset_utc = today;
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn set_last_reset_for_test(&mut self, d: chrono::NaiveDate) {
+        self.last_reset_utc = d;
     }
 }
 
@@ -149,7 +177,8 @@ where
     F: FnOnce(String, String) -> Fut,
     Fut: Future<Output = Result<(String, u64), crate::overseer::kimi::KimiError>>,
 {
-    if state.tokens_used >= state.daily_budget {
+    state.maybe_reset_for_today();
+    if state.is_budget_exhausted() {
         return Err(ReviewError::Budget { used: state.tokens_used, budget: state.daily_budget });
     }
     let (sys, user) = pack_prompt(snap);

@@ -86,3 +86,22 @@ fn pack_prompt_omits_pty_section_when_map_empty() {
     let (_, user) = galvolite::overseer::recommender::pack_prompt(&snap);
     assert!(!user.contains("# Recent PTY tails"));
 }
+
+#[test]
+fn budget_resets_at_utc_date_rollover() {
+    use galvolite::overseer::recommender::OverseerState;
+
+    // Construct a state with a very small budget, exhaust it, then
+    // simulate a date rollover by mutating the test-only setter.
+    let mut s = OverseerState::new(100);
+    s.tokens_used = 100;
+    assert!(s.is_budget_exhausted());
+
+    // Plan 9 Task 5 — public test-mode helper to simulate yesterday.
+    s.set_last_reset_for_test(chrono::Utc::now().date_naive() - chrono::Duration::days(1));
+
+    // The reset is performed inside the budget check; force a check.
+    s.maybe_reset_for_today();
+    assert_eq!(s.tokens_used, 0, "tokens should reset after date rollover");
+    assert!(!s.is_budget_exhausted());
+}
