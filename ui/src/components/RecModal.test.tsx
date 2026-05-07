@@ -53,4 +53,34 @@ describe("RecModal", () => {
     render(<RecModal projectId="p1" open onClose={() => {}} />);
     expect(await screen.findByText(/no pending/i)).toBeInTheDocument();
   });
+
+  it("switches to deferred filter and refetches", async () => {
+    const listRecs = vi.fn().mockImplementation((_pid: string, status: string) => {
+      if (status === "pending") return Promise.resolve([{
+        id: "r1", project_id: "p", kind: "k", severity: "info", title: "P-rec",
+        body: "b", rationale: "r", status: "pending", created_at: "2026-01-01T00:00:00Z",
+        acted_at: null, deferred_until: null, evidence_json: null,
+      }]);
+      if (status === "deferred") return Promise.resolve([{
+        id: "r2", project_id: "p", kind: "k", severity: "warn", title: "D-rec",
+        body: "b", rationale: "r", status: "deferred", created_at: "2026-01-01T00:00:00Z",
+        acted_at: null, deferred_until: "2026-01-02T00:00:00Z", evidence_json: null,
+      }]);
+      return Promise.resolve([]);
+    });
+    vi.spyOn(api, "listRecs").mockImplementation(listRecs);
+
+    render(<RecModal projectId="p" open={true} onClose={() => {}} />);
+
+    // Initial render: pending filter, P-rec visible.
+    await screen.findByText("P-rec");
+
+    // Click Deferred segment (segmented control uses role="tab").
+    fireEvent.click(screen.getByRole("tab", { name: /deferred/i }));
+
+    // After refetch, D-rec is visible and P-rec is not.
+    await screen.findByText("D-rec");
+    expect(screen.queryByText("P-rec")).toBeNull();
+    expect(listRecs).toHaveBeenCalledWith("p", "deferred");
+  });
 });
