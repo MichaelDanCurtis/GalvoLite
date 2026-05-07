@@ -600,6 +600,15 @@ impl SessionManager {
         Ok(project)
     }
 
+    /// Plan 9 Task 4 — return the rendered terminal screen for a running
+    /// session. Returns `None` if the session is not in the running map
+    /// (e.g. terminated or never started). Used by the Overseer's
+    /// `tail_per_session` snapshot field.
+    pub fn pty_snapshot(&self, id: Uuid) -> Option<Vec<u8>> {
+        let running = self.running.lock().unwrap();
+        running.get(&id).map(|rs| rs.scrollback.snapshot())
+    }
+
     pub async fn send_to_session(&self, id: Uuid, text: String, newline: bool) -> Result<()> {
         let driver = {
             let running = self.running.lock().unwrap();

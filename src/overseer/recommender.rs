@@ -41,6 +41,15 @@ pub fn pack_prompt(snap: &ContextSnapshot) -> (String, String) {
             user.push_str(&format!("- Q: {}\n  A: {}\n", first_line(&d.question), first_line(&d.answer)));
         }
     }
+    if !snap.tail_per_session.is_empty() {
+        user.push_str("\n# Recent PTY tails\n\n");
+        // Cap each tail to keep total prompt under PROMPT_BUDGET.
+        for (sid, tail) in snap.tail_per_session.iter().take(5) {
+            user.push_str(&format!("## Session {sid}\n\n```\n"));
+            push_capped(&mut user, tail.trim(), 800);
+            user.push_str("\n```\n\n");
+        }
+    }
     if user.len() > PROMPT_BUDGET { user.truncate(PROMPT_BUDGET); }
     (SYSTEM.to_string(), user)
 }

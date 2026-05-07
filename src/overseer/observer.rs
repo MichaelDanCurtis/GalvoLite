@@ -26,6 +26,7 @@ pub struct ContextSnapshot {
     pub directive_md: Option<String>,
     pub recent_postmortems: Vec<crate::postmortem::Postmortem>,
     pub recent_decisions: Vec<crate::decisions::Decision>,
+    pub tail_per_session: std::collections::HashMap<Uuid, String>,
 }
 
 pub struct Observer {
@@ -73,6 +74,7 @@ impl Observer {
             directive_md: None,
             recent_postmortems: vec![],
             recent_decisions: vec![],
+            tail_per_session: std::collections::HashMap::new(),
         }
     }
 
@@ -87,6 +89,25 @@ impl Observer {
         }
         if let Ok(decs) = crate::decisions::list_recent(project_path, 10) {
             snap.recent_decisions = decs;
+        }
+    }
+
+    /// Plan 9 Task 4 — populate `tail_per_session` for each running session
+    /// in this Observer's project. Reads the rendered PTY screen via
+    /// `SessionManager::pty_snapshot`. Sessions not currently running are
+    /// omitted (no entry in the map). Best-effort: a UTF-8 decode failure
+    /// is replaced with the lossy form rather than dropping the session.
+    pub fn hydrate_pty_tails(
+        &self,
+        snap: &mut ContextSnapshot,
+        mgr: &crate::session_manager::SessionManager,
+    ) {
+        let sessions = mgr.list_sessions().unwrap_or_default();
+        for s in sessions.into_iter().filter(|s| s.project_id == self.project_id) {
+            if let Some(bytes) = mgr.pty_snapshot(s.id) {
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                snap.tail_per_session.insert(s.id, text);
+            }
         }
     }
 }

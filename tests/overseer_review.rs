@@ -65,3 +65,24 @@ async fn token_budget_blocks_call() {
     }).await;
     assert!(res.is_err());
 }
+
+#[test]
+fn pack_prompt_includes_pty_tails_when_present() {
+    use galvolite::overseer::observer::ContextSnapshot;
+    let mut snap = ContextSnapshot::default();
+    let sid = uuid::Uuid::new_v4();
+    snap.tail_per_session.insert(sid, "claude> running tests\nFAIL: 3 tests".into());
+
+    let (_, user) = galvolite::overseer::recommender::pack_prompt(&snap);
+    assert!(user.contains("# Recent PTY tails"), "expected PTY tail header");
+    assert!(user.contains("FAIL: 3 tests"), "expected tail body");
+    assert!(user.contains(&sid.to_string()), "expected session id in output");
+}
+
+#[test]
+fn pack_prompt_omits_pty_section_when_map_empty() {
+    use galvolite::overseer::observer::ContextSnapshot;
+    let snap = ContextSnapshot::default();
+    let (_, user) = galvolite::overseer::recommender::pack_prompt(&snap);
+    assert!(!user.contains("# Recent PTY tails"));
+}

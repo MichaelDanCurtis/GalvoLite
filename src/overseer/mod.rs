@@ -187,6 +187,7 @@ async fn run_overseer_loop(
         if let Ok(p) = mgr.db().get_project(project_id) {
             obs.hydrate_artifacts(&mut snap, std::path::Path::new(&p.path));
         }
+        obs.hydrate_pty_tails(&mut snap, &mgr);
         let bus = mgr.event_bus().clone();
         let kc = &kimi;
         if let Err(e) = crate::overseer::recommender::review(
