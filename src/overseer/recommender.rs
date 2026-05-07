@@ -43,8 +43,12 @@ pub fn pack_prompt(snap: &ContextSnapshot) -> (String, String) {
     }
     if !snap.tail_per_session.is_empty() {
         user.push_str("\n# Recent PTY tails\n\n");
+        // Sort by session id so the prompt is reproducible across ticks
+        // when the project has more sessions than the cap.
+        let mut entries: Vec<(&Uuid, &String)> = snap.tail_per_session.iter().collect();
+        entries.sort_by_key(|(sid, _)| **sid);
         // Cap each tail to keep total prompt under PROMPT_BUDGET.
-        for (sid, tail) in snap.tail_per_session.iter().take(5) {
+        for (sid, tail) in entries.iter().take(5) {
             user.push_str(&format!("## Session {sid}\n\n```\n"));
             push_capped(&mut user, tail.trim(), 800);
             user.push_str("\n```\n\n");
