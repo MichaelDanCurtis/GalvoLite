@@ -8,6 +8,7 @@ vi.mock("../api", () => ({
     listRecs: vi.fn(),
     actRecs: vi.fn(),
     deferRec: vi.fn(),
+    explainRec: vi.fn(),
   },
 }));
 
@@ -82,5 +83,29 @@ describe("RecModal", () => {
     await screen.findByText("D-rec");
     expect(screen.queryByText("P-rec")).toBeNull();
     expect(listRecs).toHaveBeenCalledWith("p", "deferred");
+  });
+
+  it("re-explain replaces rationale on success", async () => {
+    const explainRec = vi.fn().mockResolvedValue({ updated: true });
+    vi.spyOn(api, "explainRec").mockImplementation(explainRec);
+    vi.spyOn(api, "listRecs").mockResolvedValue([{
+      id: "r1", project_id: "p", kind: "k", severity: "info", title: "T",
+      body: "B", rationale: "old rationale", status: "pending",
+      created_at: "2026-01-01T00:00:00Z", acted_at: null, deferred_until: null,
+      evidence_json: null,
+    }]);
+
+    render(<RecModal projectId="p" open={true} onClose={() => {}} />);
+    await screen.findByText("old rationale");
+
+    fireEvent.click(screen.getByRole("button", { name: /re-explain/i }));
+
+    const textarea = screen.getByPlaceholderText(/what's unclear/i);
+    fireEvent.change(textarea, { target: { value: "explain like I'm 5" } });
+    fireEvent.click(screen.getByRole("button", { name: /^submit$/i }));
+
+    await waitFor(() => {
+      expect(explainRec).toHaveBeenCalledWith("p", "r1", "explain like I'm 5");
+    });
   });
 });

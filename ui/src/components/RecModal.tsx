@@ -17,6 +17,68 @@ function emptyCopy(f: StatusFilter): string {
   }
 }
 
+function RecActions({
+  projectId,
+  rec,
+  busy,
+  setBusy,
+  onChanged,
+}: {
+  projectId: string;
+  rec: Recommendation;
+  busy: boolean;
+  setBusy: (b: boolean) => void;
+  onChanged: (next: Recommendation) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        className="text-xs px-2 py-0.5 rounded bg-neutral-700 hover:bg-neutral-600"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          await api.deferRec(projectId, rec.id);
+          // Caller refetches the list; nothing to replace here.
+          setBusy(false);
+        }}
+      >Defer</button>
+      <button
+        className="text-xs px-2 py-0.5 rounded bg-neutral-700 hover:bg-neutral-600"
+        disabled={busy}
+        onClick={() => setOpen((v) => !v)}
+      >{open ? "Cancel" : "Re-explain"}</button>
+      {open && (
+        <div className="mt-1">
+          <textarea
+            className="w-full text-xs bg-neutral-800 border border-neutral-700 rounded p-1"
+            rows={2}
+            placeholder="What's unclear about this recommendation?"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <button
+            className="mt-1 text-xs px-2 py-0.5 rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-50"
+            disabled={busy || text.trim().length === 0}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await api.explainRec(projectId, rec.id, text);
+                onChanged({ ...rec, rationale: text });
+                setOpen(false);
+                setText("");
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >Submit</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function RecModal({ projectId, open, onClose }: Props) {
   const [filter, setFilter] = useState<StatusFilter>("pending");
   const [recs, setRecs] = useState<Recommendation[]>([]);
@@ -92,13 +154,13 @@ export function RecModal({ projectId, open, onClose }: Props) {
                 <div className="text-xs text-neutral-500 mt-1 italic">{r.rationale}</div>
               </div>
               {canAct && (
-                <div className="flex flex-col gap-1">
-                  <button
-                    className="text-xs px-2 py-0.5 rounded bg-neutral-700 hover:bg-neutral-600"
-                    disabled={busy}
-                    onClick={async () => { setBusy(true); await api.deferRec(projectId, r.id); await refresh(); setBusy(false); }}
-                  >Defer</button>
-                </div>
+                <RecActions
+                  projectId={projectId}
+                  rec={r}
+                  busy={busy}
+                  setBusy={setBusy}
+                  onChanged={(next) => setRecs((rs) => rs.map((x) => (x.id === next.id ? next : x)))}
+                />
               )}
             </div>
           </div>
