@@ -130,6 +130,8 @@ describe("RecModal", () => {
 
     await waitFor(() => {
       expect(explainRec).toHaveBeenCalledWith("p", "r1", "explain like I'm 5");
+      expect(screen.getByText("explain like I'm 5")).toBeInTheDocument();
+      expect(screen.queryByText("old rationale")).toBeNull();
     });
   });
 });
