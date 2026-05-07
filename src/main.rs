@@ -43,10 +43,12 @@ async fn main() -> Result<()> {
             t.tick().await;
             loop {
                 t.tick().await;
-                let _ = galvolite::recommendations::resurface_expired(
+                if let Err(e) = galvolite::recommendations::resurface_expired(
                     mgr.db(),
                     chrono::Utc::now(),
-                );
+                ) {
+                    tracing::warn!(error = ?e, "rec resurface sweep failed");
+                }
                 if let Err(e) = galvolite::recommendations::archive_old(
                     mgr.db(),
                     chrono::Duration::days(7),

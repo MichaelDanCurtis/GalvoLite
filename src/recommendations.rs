@@ -151,8 +151,9 @@ pub fn update_rationale(db: &Db, id: Uuid, rationale: &str) -> Result<()> {
 /// logging. Pending and deferred recs are exempt.
 pub fn archive_old(db: &Db, age: chrono::Duration) -> Result<usize> {
     let conn = db.pool().get()?;
-    let cutoff = (Utc::now() - age).to_rfc3339();
-    let now = Utc::now().to_rfc3339();
+    let now_dt = Utc::now();
+    let cutoff = (now_dt - age).to_rfc3339();
+    let now = now_dt.to_rfc3339();
     let n = conn.execute(
         "UPDATE recommendations SET status='archived', status_changed_at=?1
          WHERE status IN ('acted','dismissed') AND status_changed_at < ?2",
