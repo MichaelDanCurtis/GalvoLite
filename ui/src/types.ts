@@ -185,7 +185,7 @@ export interface Recommendation {
   body: string;
   rationale: string;
   evidence_json: unknown;
-  status: "pending" | "acted" | "dismissed" | "deferred";
+  status: "pending" | "acted" | "dismissed" | "deferred" | "archived";
   created_at: string;
   acted_at: string | null;
   deferred_until: string | null;

@@ -42,7 +42,7 @@ pub async fn handler(
 /// the operator unblock them.
 ///
 /// Error responses:
-/// - 403  GALVOLITE_PLAN_EXECUTOR=0 (feature flag off)
+/// - 403  plan executor explicitly disabled via `GALVOLITE_PLAN_EXECUTOR=0`
 /// - 409  no orchestrator found for project
 /// - 409  `phase_id` does not match the head of the pending-phases queue
 /// - 200  phase advanced; body `{"approved": "<phase_id>"}`

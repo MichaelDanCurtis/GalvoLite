@@ -24,9 +24,10 @@ use uuid::Uuid;
 const DEFAULT_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Owns one background task per registered project. Each task runs the
-/// Overseer review loop (observer → recommender → bus). The supervisor itself
-/// does not subscribe to the bus; lifecycle is handled by a polling reconcile
-/// loop because we have no `ProjectDeleted` domain event.
+/// Overseer review loop (observer → recommender → bus). Lifecycle is
+/// driven by `ProjectAdded`/`ProjectDeleted` bus subscriptions, with a
+/// periodic reconcile loop as a belt-and-suspenders fallback for
+/// lagged-subscriber gaps.
 pub struct OverseerSupervisor {
     mgr: Arc<SessionManager>,
     tasks: Arc<Mutex<HashMap<Uuid, JoinHandle<()>>>>,
@@ -54,8 +55,9 @@ impl OverseerSupervisor {
     }
 
     /// Walk the projects table and spawn one task per project, then start the
-    /// lifecycle reconcile loop. No-op if `GALVOLITE_OVERSEER` is unset or if
-    /// `KIMI_API_KEY` is missing — the supervisor stays inert in either case.
+    /// lifecycle reconcile loop. No-op if `GALVOLITE_OVERSEER` is set to a
+    /// falsy value or `KIMI_API_KEY` is missing — the supervisor stays inert
+    /// in either case.
     pub async fn spawn_for_existing_projects(&self) {
         if !crate::overseer::config::overseer_enabled() {
             return;
