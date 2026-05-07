@@ -15,11 +15,12 @@ use uuid::Uuid;
 
 /// Default cadence for the lifecycle reconcile loop.
 ///
-/// The reconcile loop polls `list_projects()` and aborts task handles for
-/// projects that have been deleted. There is no `DomainEvent::ProjectDeleted`
-/// today (intentional — see plan §12), so this polling fallback is the
-/// authoritative lifecycle source. 30s is fine for production; tests use
-/// `with_reconcile_interval` to drop it to ~50ms.
+/// The reconcile loop is now a belt-and-suspenders fallback to the
+/// `DomainEvent::ProjectDeleted` bus subscription added in Plan 9. It
+/// reconciles tracked task handles against the live project set in case
+/// the bus event is lost (e.g. lagged subscriber, brief crash window).
+/// 30s is fine for production; tests use `with_reconcile_interval` to
+/// drop it to ~50ms.
 const DEFAULT_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Owns one background task per registered project. Each task runs the
@@ -134,6 +135,12 @@ impl OverseerSupervisor {
                         let handle =
                             tokio::spawn(run_overseer_loop(mgr, project_id, cfg.clone()));
                         t.insert(project_id, handle);
+                    }
+                    Ok(crate::api::events::DomainEvent::ProjectDeleted { project_id }) => {
+                        let mut t = tasks_bus.lock().unwrap();
+                        if let Some(h) = t.remove(&project_id) {
+                            h.abort();
+                        }
                     }
                     Ok(_) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,

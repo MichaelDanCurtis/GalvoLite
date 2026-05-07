@@ -718,6 +718,9 @@ impl SessionManager {
         self.project_watchers.lock().unwrap().remove(&project_id);
 
         self.db.delete_project_cascade(project_id)?;
+        self.event_bus().publish(
+            crate::api::events::DomainEvent::ProjectDeleted { project_id },
+        );
         Ok(())
     }
 

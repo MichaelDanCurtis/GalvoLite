@@ -95,6 +95,8 @@ pub enum DomainEvent {
     OverseerRecovered { project_id: Uuid },
     #[serde(rename = "project.added")]
     ProjectAdded { project_id: Uuid },
+    #[serde(rename = "project.deleted")]
+    ProjectDeleted { project_id: Uuid },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -154,7 +156,8 @@ impl DomainEvent {
             | DomainEvent::RecommendationActed { .. }
             | DomainEvent::OverseerDegraded { .. }
             | DomainEvent::OverseerRecovered { .. }
-            | DomainEvent::ProjectAdded { .. } => false,
+            | DomainEvent::ProjectAdded { .. }
+            | DomainEvent::ProjectDeleted { .. } => false,
         }
     }
 }
