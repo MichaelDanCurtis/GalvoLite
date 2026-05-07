@@ -9,13 +9,14 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecStatus { Pending, Acted, Dismissed, Deferred }
+pub enum RecStatus { Pending, Acted, Dismissed, Deferred, Archived }
 
 impl RecStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending", Self::Acted => "acted",
             Self::Dismissed => "dismissed", Self::Deferred => "deferred",
+            Self::Archived => "archived",
         }
     }
 }
@@ -65,8 +66,8 @@ pub fn insert(db: &Db, n: NewRec) -> Result<Option<Uuid>> {
     let rows = conn.execute(
         "INSERT OR IGNORE INTO recommendations
          (id, project_id, kind, severity, title, body, rationale, evidence_json,
-          status, created_at, content_hash)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'pending',?9,?10)",
+          status, created_at, status_changed_at, content_hash)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'pending',?9,?9,?10)",
         params![
             id.to_string(), n.project_id.to_string(), n.kind, n.severity,
             n.title, n.body, n.rationale,
@@ -101,21 +102,25 @@ pub fn get(db: &Db, id: Uuid) -> Result<Recommendation> {
 
 pub fn set_status(db: &Db, id: Uuid, status: RecStatus) -> Result<()> {
     let conn = db.pool().get()?;
+    let now = Utc::now().to_rfc3339();
     let acted_at = if matches!(status, RecStatus::Acted) {
-        Some(Utc::now().to_rfc3339())
+        Some(now.clone())
     } else { None };
     conn.execute(
-        "UPDATE recommendations SET status=?1, acted_at=COALESCE(?2, acted_at) WHERE id=?3",
-        params![status.as_str(), acted_at, id.to_string()],
+        "UPDATE recommendations SET status=?1, acted_at=COALESCE(?2, acted_at),
+         status_changed_at=?3 WHERE id=?4",
+        params![status.as_str(), acted_at, now, id.to_string()],
     )?;
     Ok(())
 }
 
 pub fn defer(db: &Db, id: Uuid, until: DateTime<Utc>) -> Result<()> {
     let conn = db.pool().get()?;
+    let now = Utc::now().to_rfc3339();
     conn.execute(
-        "UPDATE recommendations SET status='deferred', deferred_until=?1 WHERE id=?2",
-        params![until.to_rfc3339(), id.to_string()],
+        "UPDATE recommendations SET status='deferred', deferred_until=?1,
+         status_changed_at=?2 WHERE id=?3",
+        params![until.to_rfc3339(), now, id.to_string()],
     )?;
     Ok(())
 }
@@ -123,7 +128,8 @@ pub fn defer(db: &Db, id: Uuid, until: DateTime<Utc>) -> Result<()> {
 pub fn resurface_expired(db: &Db, now: DateTime<Utc>) -> Result<usize> {
     let conn = db.pool().get()?;
     let n = conn.execute(
-        "UPDATE recommendations SET status='pending', deferred_until=NULL
+        "UPDATE recommendations SET status='pending', deferred_until=NULL,
+         status_changed_at=?1
          WHERE status='deferred' AND deferred_until IS NOT NULL AND deferred_until <= ?1",
         params![now.to_rfc3339()],
     )?;
@@ -138,6 +144,22 @@ pub fn update_rationale(db: &Db, id: Uuid, rationale: &str) -> Result<()> {
         params![rationale, id.to_string()],
     )?;
     Ok(())
+}
+
+/// Plan 9 Task 2 — flip `acted` and `dismissed` recs older than `age`
+/// (measured by `status_changed_at`) to `archived`. Returns row count for
+/// logging. Pending and deferred recs are exempt.
+pub fn archive_old(db: &Db, age: chrono::Duration) -> Result<usize> {
+    let conn = db.pool().get()?;
+    let now_dt = Utc::now();
+    let cutoff = (now_dt - age).to_rfc3339();
+    let now = now_dt.to_rfc3339();
+    let n = conn.execute(
+        "UPDATE recommendations SET status='archived', status_changed_at=?1
+         WHERE status IN ('acted','dismissed') AND status_changed_at < ?2",
+        params![now, cutoff],
+    )?;
+    Ok(n)
 }
 
 fn row_to_rec(r: &rusqlite::Row) -> rusqlite::Result<Recommendation> {

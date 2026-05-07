@@ -65,3 +65,59 @@ async fn token_budget_blocks_call() {
     }).await;
     assert!(res.is_err());
 }
+
+#[test]
+fn pack_prompt_includes_pty_tails_when_present() {
+    use galvolite::overseer::observer::ContextSnapshot;
+    let mut snap = ContextSnapshot::default();
+    let sid = uuid::Uuid::new_v4();
+    snap.tail_per_session.insert(sid, "claude> running tests\nFAIL: 3 tests".into());
+
+    let (_, user) = galvolite::overseer::recommender::pack_prompt(&snap);
+    assert!(user.contains("# Recent PTY tails"), "expected PTY tail header");
+    assert!(user.contains("FAIL: 3 tests"), "expected tail body");
+    assert!(user.contains(&sid.to_string()), "expected session id in output");
+}
+
+#[test]
+fn pack_prompt_omits_pty_section_when_map_empty() {
+    use galvolite::overseer::observer::ContextSnapshot;
+    let snap = ContextSnapshot::default();
+    let (_, user) = galvolite::overseer::recommender::pack_prompt(&snap);
+    assert!(!user.contains("# Recent PTY tails"));
+}
+
+#[test]
+fn pack_prompt_handles_non_ascii_pty_tail_without_panic() {
+    use galvolite::overseer::observer::ContextSnapshot;
+    let mut snap = ContextSnapshot::default();
+    let sid = uuid::Uuid::new_v4();
+    // Build a tail that exceeds the 800-char cap with multi-byte chars
+    // straddling the boundary (each ✓ is 3 bytes in UTF-8).
+    let tail = "✓".repeat(400);
+    snap.tail_per_session.insert(sid, tail);
+
+    // Should not panic.
+    let (_, user) = galvolite::overseer::recommender::pack_prompt(&snap);
+    assert!(user.contains("# Recent PTY tails"));
+    assert!(user.contains("…(truncated)"), "expected truncation marker");
+}
+
+#[test]
+fn budget_resets_at_utc_date_rollover() {
+    use galvolite::overseer::recommender::OverseerState;
+
+    // Construct a state with a very small budget, exhaust it, then
+    // simulate a date rollover by mutating the test-only setter.
+    let mut s = OverseerState::new(100);
+    s.tokens_used = 100;
+    assert!(s.is_budget_exhausted());
+
+    // Plan 9 Task 5 — public test-mode helper to simulate yesterday.
+    s.set_last_reset_for_test(chrono::Utc::now().date_naive() - chrono::Duration::days(1));
+
+    // The reset is performed inside the budget check; force a check.
+    s.maybe_reset_for_today();
+    assert_eq!(s.tokens_used, 0, "tokens should reset after date rollover");
+    assert!(!s.is_budget_exhausted());
+}

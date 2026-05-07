@@ -4,12 +4,23 @@ use std::sync::Mutex;
 static MUTEX: Mutex<()> = Mutex::new(());
 
 #[test]
-fn defaults_off_when_env_unset() {
+fn defaults_on_when_env_unset() {
     let _lock = MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     std::env::remove_var("GALVOLITE_OVERSEER");
     std::env::remove_var("GALVOLITE_PLAN_EXECUTOR");
+    assert!(overseer_enabled());
+    assert!(executor_enabled());
+}
+
+#[test]
+fn disabled_when_env_set_falsy() {
+    let _lock = MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("GALVOLITE_OVERSEER", "0");
+    std::env::set_var("GALVOLITE_PLAN_EXECUTOR", "off");
     assert!(!overseer_enabled());
     assert!(!executor_enabled());
+    std::env::remove_var("GALVOLITE_OVERSEER");
+    std::env::remove_var("GALVOLITE_PLAN_EXECUTOR");
 }
 
 #[test]

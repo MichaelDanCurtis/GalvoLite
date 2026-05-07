@@ -9,6 +9,12 @@ use uuid::Uuid;
 pub const EVENT_RING_CAP: usize = 200;
 pub const PTY_TAIL_LINE_CAP: usize = 50;
 
+/// Plan 9 Task 4 — cap per-session PTY tail length at insertion time so
+/// the snapshot's heap footprint scales with min(N×cap), not with the
+/// rendered screen size. The packer's 800-char cap is a second line of
+/// defence; this cap protects peak memory before the packer runs.
+pub const PTY_TAIL_HYDRATE_CAP: usize = 1200;
+
 #[derive(Debug, Clone)]
 pub struct EventRecord {
     pub session_id: Uuid,
@@ -26,6 +32,7 @@ pub struct ContextSnapshot {
     pub directive_md: Option<String>,
     pub recent_postmortems: Vec<crate::postmortem::Postmortem>,
     pub recent_decisions: Vec<crate::decisions::Decision>,
+    pub tail_per_session: std::collections::HashMap<Uuid, String>,
 }
 
 pub struct Observer {
@@ -73,6 +80,7 @@ impl Observer {
             directive_md: None,
             recent_postmortems: vec![],
             recent_decisions: vec![],
+            tail_per_session: std::collections::HashMap::new(),
         }
     }
 
@@ -87,6 +95,35 @@ impl Observer {
         }
         if let Ok(decs) = crate::decisions::list_recent(project_path, 10) {
             snap.recent_decisions = decs;
+        }
+    }
+
+    /// Plan 9 Task 4 — populate `tail_per_session` for each running session
+    /// in this Observer's project. Reads the rendered PTY screen via
+    /// `SessionManager::pty_snapshot`. Sessions not currently running are
+    /// omitted (no entry in the map). Best-effort: a UTF-8 decode failure
+    /// is replaced with the lossy form rather than dropping the session.
+    /// Each tail is truncated to `PTY_TAIL_HYDRATE_CAP` bytes at a UTF-8
+    /// boundary so the snapshot's heap footprint scales with min(N×cap).
+    pub fn hydrate_pty_tails(
+        &self,
+        snap: &mut ContextSnapshot,
+        mgr: &crate::session_manager::SessionManager,
+    ) {
+        let sessions = mgr.list_sessions().unwrap_or_default();
+        for s in sessions.into_iter().filter(|s| s.project_id == self.project_id) {
+            if let Some(bytes) = mgr.pty_snapshot(s.id) {
+                let mut text = String::from_utf8_lossy(&bytes).into_owned();
+                if text.len() > PTY_TAIL_HYDRATE_CAP {
+                    // Truncate at a UTF-8 boundary at or below the cap.
+                    let mut cut = PTY_TAIL_HYDRATE_CAP;
+                    while !text.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
+                    text.truncate(cut);
+                }
+                snap.tail_per_session.insert(s.id, text);
+            }
         }
     }
 }

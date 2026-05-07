@@ -1,6 +1,6 @@
 //! Plan 8 Task 13 — Recommendations REST: list endpoint.
 //!
-//! `GET /api/projects/:id/recommendations[?status=pending|acted|dismissed|deferred]`
+//! `GET /api/projects/:id/recommendations[?status=pending|acted|dismissed|deferred|archived]`
 //!
 //! Returns the rows from [`crate::recommendations::list_by_status`] as JSON.
 //! The `status` query parameter defaults to `pending`. Unknown values yield
@@ -41,6 +41,7 @@ pub async fn list(
         Some("acted") => RecStatus::Acted,
         Some("dismissed") => RecStatus::Dismissed,
         Some("deferred") => RecStatus::Deferred,
+        Some("archived") => RecStatus::Archived,
         _ => return (StatusCode::BAD_REQUEST, "bad status").into_response(),
     };
     match recommendations::list_by_status(mgr.db(), project_id, status) {

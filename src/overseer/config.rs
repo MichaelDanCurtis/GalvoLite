@@ -6,15 +6,22 @@ const DEFAULT_KIMI_MODEL: &str = "kimi-for-coding";
 const DEFAULT_DAILY_TOKEN_BUDGET: u64 = 100_000;
 
 pub fn overseer_enabled() -> bool {
-    truthy(std::env::var("GALVOLITE_OVERSEER").ok().as_deref())
+    enabled_with_default(std::env::var("GALVOLITE_OVERSEER").ok().as_deref(), true)
 }
 
 pub fn executor_enabled() -> bool {
-    truthy(std::env::var("GALVOLITE_PLAN_EXECUTOR").ok().as_deref())
+    enabled_with_default(std::env::var("GALVOLITE_PLAN_EXECUTOR").ok().as_deref(), true)
 }
 
-fn truthy(v: Option<&str>) -> bool {
-    matches!(v.map(str::to_ascii_lowercase).as_deref(), Some("1" | "true" | "yes" | "on"))
+fn enabled_with_default(v: Option<&str>, default: bool) -> bool {
+    match v.map(str::to_ascii_lowercase).as_deref() {
+        None => default,
+        Some("1" | "true" | "yes" | "on") => true,
+        Some("0" | "false" | "no" | "off") => false,
+        // Unknown values are conservative: treat as off when the user
+        // bothered to set the var to something.
+        Some(_) => false,
+    }
 }
 
 #[derive(Debug, Clone)]

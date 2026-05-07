@@ -16,7 +16,7 @@ fn new_db_applies_schema() {
             |row| row.get(0),
         )
         .expect("query schema_version");
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
 }
 
 #[test]

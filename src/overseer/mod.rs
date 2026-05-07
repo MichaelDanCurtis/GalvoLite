@@ -15,17 +15,19 @@ use uuid::Uuid;
 
 /// Default cadence for the lifecycle reconcile loop.
 ///
-/// The reconcile loop polls `list_projects()` and aborts task handles for
-/// projects that have been deleted. There is no `DomainEvent::ProjectDeleted`
-/// today (intentional — see plan §12), so this polling fallback is the
-/// authoritative lifecycle source. 30s is fine for production; tests use
-/// `with_reconcile_interval` to drop it to ~50ms.
+/// The reconcile loop is now a belt-and-suspenders fallback to the
+/// `DomainEvent::ProjectDeleted` bus subscription added in Plan 9. It
+/// reconciles tracked task handles against the live project set in case
+/// the bus event is lost (e.g. lagged subscriber, brief crash window).
+/// 30s is fine for production; tests use `with_reconcile_interval` to
+/// drop it to ~50ms.
 const DEFAULT_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Owns one background task per registered project. Each task runs the
-/// Overseer review loop (observer → recommender → bus). The supervisor itself
-/// does not subscribe to the bus; lifecycle is handled by a polling reconcile
-/// loop because we have no `ProjectDeleted` domain event.
+/// Overseer review loop (observer → recommender → bus). Lifecycle is
+/// driven by `ProjectAdded`/`ProjectDeleted` bus subscriptions, with a
+/// periodic reconcile loop as a belt-and-suspenders fallback for
+/// lagged-subscriber gaps.
 pub struct OverseerSupervisor {
     mgr: Arc<SessionManager>,
     tasks: Arc<Mutex<HashMap<Uuid, JoinHandle<()>>>>,
@@ -53,8 +55,9 @@ impl OverseerSupervisor {
     }
 
     /// Walk the projects table and spawn one task per project, then start the
-    /// lifecycle reconcile loop. No-op if `GALVOLITE_OVERSEER` is unset or if
-    /// `KIMI_API_KEY` is missing — the supervisor stays inert in either case.
+    /// lifecycle reconcile loop. No-op if `GALVOLITE_OVERSEER` is set to a
+    /// falsy value or `KIMI_API_KEY` is missing — the supervisor stays inert
+    /// in either case.
     pub async fn spawn_for_existing_projects(&self) {
         if !crate::overseer::config::overseer_enabled() {
             return;
@@ -86,8 +89,10 @@ impl OverseerSupervisor {
     /// clones of `mgr` + `tasks` and runs for the lifetime of the process —
     /// it compares the live project set against tracked tasks and aborts
     /// handles for vanished projects. The bus listener subscribes to
-    /// `ProjectAdded` events so projects added after startup get an Overseer
-    /// task without requiring a server restart.
+    /// `ProjectAdded` and `ProjectDeleted` events: the former spawns a task
+    /// for projects added after startup; the latter aborts and removes the
+    /// task for projects deleted at runtime, without requiring a server
+    /// restart.
     fn start_lifecycle_listener(&self, cfg: crate::overseer::config::OverseerConfig) {
         let mgr_recon = Arc::clone(&self.mgr);
         let tasks_recon = Arc::clone(&self.tasks);
@@ -135,6 +140,12 @@ impl OverseerSupervisor {
                             tokio::spawn(run_overseer_loop(mgr, project_id, cfg.clone()));
                         t.insert(project_id, handle);
                     }
+                    Ok(crate::api::events::DomainEvent::ProjectDeleted { project_id }) => {
+                        let mut t = tasks_bus.lock().unwrap();
+                        if let Some(h) = t.remove(&project_id) {
+                            h.abort();
+                        }
+                    }
                     Ok(_) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -180,6 +191,7 @@ async fn run_overseer_loop(
         if let Ok(p) = mgr.db().get_project(project_id) {
             obs.hydrate_artifacts(&mut snap, std::path::Path::new(&p.path));
         }
+        obs.hydrate_pty_tails(&mut snap, &mgr);
         let bus = mgr.event_bus().clone();
         let kc = &kimi;
         if let Err(e) = crate::overseer::recommender::review(

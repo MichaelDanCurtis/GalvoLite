@@ -32,8 +32,10 @@ async fn main() -> Result<()> {
     }
     // Plan 8 Task 15 — recommendations sweep: every 5 minutes, flip any
     // `deferred` recs whose `deferred_until` has elapsed back to `pending`.
+    // Plan 9 Task 2 — same tick also archives acted/dismissed recs older
+    // than 7 days (status-change age).
     // Runs unconditionally (harmless when Overseer is disabled — there will
-    // simply be nothing to resurface).
+    // simply be nothing to resurface or archive).
     {
         let mgr = Arc::clone(&mgr);
         tokio::spawn(async move {
@@ -41,10 +43,18 @@ async fn main() -> Result<()> {
             t.tick().await;
             loop {
                 t.tick().await;
-                let _ = galvolite::recommendations::resurface_expired(
+                if let Err(e) = galvolite::recommendations::resurface_expired(
                     mgr.db(),
                     chrono::Utc::now(),
-                );
+                ) {
+                    tracing::warn!(error = ?e, "rec resurface sweep failed");
+                }
+                if let Err(e) = galvolite::recommendations::archive_old(
+                    mgr.db(),
+                    chrono::Duration::days(7),
+                ) {
+                    tracing::warn!(error = ?e, "rec archive sweep failed");
+                }
             }
         });
     }

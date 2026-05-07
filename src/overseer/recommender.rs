@@ -41,12 +41,37 @@ pub fn pack_prompt(snap: &ContextSnapshot) -> (String, String) {
             user.push_str(&format!("- Q: {}\n  A: {}\n", first_line(&d.question), first_line(&d.answer)));
         }
     }
+    if !snap.tail_per_session.is_empty() {
+        user.push_str("\n# Recent PTY tails\n\n");
+        // Sort by session id so the prompt is reproducible across ticks
+        // when the project has more sessions than the cap.
+        let mut entries: Vec<(&Uuid, &String)> = snap.tail_per_session.iter().collect();
+        entries.sort_by_key(|(sid, _)| **sid);
+        // Cap each tail to keep total prompt under PROMPT_BUDGET.
+        for (sid, tail) in entries.iter().take(5) {
+            user.push_str(&format!("## Session {sid}\n\n```\n"));
+            push_capped(&mut user, tail.trim(), 800);
+            user.push_str("\n```\n\n");
+        }
+    }
     if user.len() > PROMPT_BUDGET { user.truncate(PROMPT_BUDGET); }
     (SYSTEM.to_string(), user)
 }
 
 fn push_capped(out: &mut String, s: &str, cap: usize) {
-    if s.len() <= cap { out.push_str(s); } else { out.push_str(&s[..cap]); out.push_str("\n…(truncated)\n"); }
+    if s.len() <= cap {
+        out.push_str(s);
+    } else {
+        // Walk back to a UTF-8 boundary at or below `cap` so we never
+        // slice mid-codepoint (panic) when content includes non-ASCII
+        // bytes (e.g. rendered PTY tails).
+        let mut cut = cap;
+        while !s.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        out.push_str(&s[..cut]);
+        out.push_str("\n…(truncated)\n");
+    }
 }
 
 fn first_line(s: &str) -> &str { s.lines().next().unwrap_or("") }
@@ -107,11 +132,39 @@ pub struct OverseerState {
     pub tokens_used: u64,
     pub consecutive_failures: u32,
     pub degraded: bool,
+    /// Plan 9 Task 5 — last UTC date the counter was reset.
+    pub last_reset_utc: chrono::NaiveDate,
 }
 
 impl OverseerState {
     pub fn new(daily_budget: u64) -> Self {
-        Self { daily_budget, tokens_used: 0, consecutive_failures: 0, degraded: false }
+        Self {
+            daily_budget,
+            tokens_used: 0,
+            consecutive_failures: 0,
+            degraded: false,
+            last_reset_utc: chrono::Utc::now().date_naive(),
+        }
+    }
+
+    /// True when the running counter has hit (or exceeded) the budget.
+    pub fn is_budget_exhausted(&self) -> bool {
+        self.tokens_used >= self.daily_budget
+    }
+
+    /// Reset the counter when the UTC date has advanced past
+    /// `last_reset_utc`. Called from `review` before the budget check.
+    pub fn maybe_reset_for_today(&mut self) {
+        let today = chrono::Utc::now().date_naive();
+        if today > self.last_reset_utc {
+            self.tokens_used = 0;
+            self.last_reset_utc = today;
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn set_last_reset_for_test(&mut self, d: chrono::NaiveDate) {
+        self.last_reset_utc = d;
     }
 }
 
@@ -136,7 +189,8 @@ where
     F: FnOnce(String, String) -> Fut,
     Fut: Future<Output = Result<(String, u64), crate::overseer::kimi::KimiError>>,
 {
-    if state.tokens_used >= state.daily_budget {
+    state.maybe_reset_for_today();
+    if state.is_budget_exhausted() {
         return Err(ReviewError::Budget { used: state.tokens_used, budget: state.daily_budget });
     }
     let (sys, user) = pack_prompt(snap);
