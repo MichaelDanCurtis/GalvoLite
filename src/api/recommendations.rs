@@ -41,6 +41,7 @@ pub async fn list(
         Some("acted") => RecStatus::Acted,
         Some("dismissed") => RecStatus::Dismissed,
         Some("deferred") => RecStatus::Deferred,
+        Some("archived") => RecStatus::Archived,
         _ => return (StatusCode::BAD_REQUEST, "bad status").into_response(),
     };
     match recommendations::list_by_status(mgr.db(), project_id, status) {

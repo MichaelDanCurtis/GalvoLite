@@ -15,6 +15,7 @@ const SCHEMA_V2: &str = include_str!("../migrations/0002_hooks_mcp_foundations.s
 const SCHEMA_V3: &str = include_str!("../migrations/0003_session_spawn.sql");
 const SCHEMA_V4: &str = include_str!("../migrations/0004_overseer_executor.sql");
 const SCHEMA_V5: &str = include_str!("../migrations/0005_pending_phases.sql");
+const SCHEMA_V6: &str = include_str!("../migrations/0006_rec_archived.sql");
 
 /// (version, sql_body). Order matters: applied lowest-to-highest. Each entry
 /// is applied iff the version is not present in `schema_version`.
@@ -24,6 +25,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (3, SCHEMA_V3),
     (4, SCHEMA_V4),
     (5, SCHEMA_V5),
+    (6, SCHEMA_V6),
 ];
 
 #[derive(Clone)]
