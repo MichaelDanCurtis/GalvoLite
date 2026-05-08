@@ -75,6 +75,8 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route("/api/operator/prompt/:id/answer", post(operator::answer))
         .route("/api/github/status", get(github::status))
         .route("/api/projects/:id/github/repo", put(github::link_repo))
+        .route("/api/projects/:id/github/prs", get(github::list_prs))
+        .route("/api/projects/:id/github/issues", get(github::list_issues))
         .route("/mcp", post(crate::mcp::transport::handle))
         .layer(CorsLayer::permissive())
         .with_state(mgr);

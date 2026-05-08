@@ -119,3 +119,104 @@ pub async fn link_repo(
         Err(e) => crate::api::err_to_response(e),
     }
 }
+
+/// `GET /api/projects/:id/github/prs` — list open PRs for the project's
+/// linked repo. Returns 404 if no repo is linked or project unknown,
+/// 503 if no token, 502 on GitHub error.
+pub async fn list_prs(
+    State(mgr): State<Arc<SessionManager>>,
+    Path(project_id): Path<Uuid>,
+) -> Response {
+    let (owner, name) = match resolve_linked_repo(&mgr, project_id) {
+        Ok(parts) => parts,
+        Err(resp) => return resp,
+    };
+
+    let Some(client) = crate::github::Client::from_env() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "GITHUB_TOKEN not set on server"})),
+        )
+            .into_response();
+    };
+
+    match client.list_open_prs(&owner, &name).await {
+        Ok(prs) => Json(prs).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": format!("{e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/projects/:id/github/issues` — same shape as list_prs but
+/// for issues (PRs filtered out by the client).
+pub async fn list_issues(
+    State(mgr): State<Arc<SessionManager>>,
+    Path(project_id): Path<Uuid>,
+) -> Response {
+    let (owner, name) = match resolve_linked_repo(&mgr, project_id) {
+        Ok(parts) => parts,
+        Err(resp) => return resp,
+    };
+
+    let Some(client) = crate::github::Client::from_env() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "GITHUB_TOKEN not set on server"})),
+        )
+            .into_response();
+    };
+
+    match client.list_open_issues(&owner, &name).await {
+        Ok(issues) => Json(issues).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": format!("{e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// Helper: fetch the project, parse its linked repo, return owner+name.
+/// Folds all error cases (project not found, no linked repo, malformed
+/// stored repo) into pre-built `Response` values so the call sites stay
+/// flat.
+///
+/// `Db::get_project` surfaces a missing row as
+/// `Error::Db(rusqlite::Error::QueryReturnedNoRows)` rather than
+/// `Error::ProjectNotFound`, so we normalize here before delegating to
+/// `err_to_response` — same pattern as `SessionManager::delete_project`.
+fn resolve_linked_repo(
+    mgr: &Arc<SessionManager>,
+    project_id: Uuid,
+) -> Result<(String, String), Response> {
+    let project = match mgr.db().get_project(project_id) {
+        Ok(p) => p,
+        Err(crate::error::Error::ProjectNotFound(_))
+        | Err(crate::error::Error::Db(rusqlite::Error::QueryReturnedNoRows)) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "project not found"})),
+            )
+                .into_response());
+        }
+        Err(e) => return Err(crate::api::err_to_response(e)),
+    };
+    let stored = project.github_repo.ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "no linked repo"})),
+        )
+            .into_response()
+    })?;
+    match parse_repo(&stored) {
+        Some((o, n)) => Ok((o.to_string(), n.to_string())),
+        None => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "stored repo has bad format"})),
+        )
+            .into_response()),
+    }
+}

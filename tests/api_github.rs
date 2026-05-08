@@ -106,3 +106,42 @@ async fn link_repo_503_when_token_unset() {
 // because the handler constructs a Client from env. Coverage for the
 // GitHub-side validation is in tests/github_client.rs::validate_repo_*.
 // We separately verify the DB write path via tests/db_crud.rs::project_github_repo_round_trip.
+
+#[tokio::test]
+async fn list_prs_404_when_no_linked_repo() {
+    let _g = env_lock().lock().await;
+    std::env::set_var("GITHUB_TOKEN", "x");
+
+    let setup = common::test_app();
+    let p = setup.mgr.add_project(NewProject {
+        name: "p".into(),
+        path: setup._dir.path().to_string_lossy().into_owned(),
+        remote_url: None,
+    }).unwrap();
+
+    let resp = setup.app.oneshot(
+        Request::builder()
+            .uri(format!("/api/projects/{}/github/prs", p.id))
+            .body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    std::env::remove_var("GITHUB_TOKEN");
+}
+
+#[tokio::test]
+async fn list_issues_404_when_project_missing() {
+    let _g = env_lock().lock().await;
+    std::env::set_var("GITHUB_TOKEN", "x");
+
+    let setup = common::test_app();
+    let bogus = uuid::Uuid::new_v4();
+    let resp = setup.app.oneshot(
+        Request::builder()
+            .uri(format!("/api/projects/{}/github/issues", bogus))
+            .body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    std::env::remove_var("GITHUB_TOKEN");
+}
