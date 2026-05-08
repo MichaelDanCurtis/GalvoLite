@@ -84,6 +84,7 @@ pub async fn link_repo(
     Json(req): Json<LinkRepoReq>,
 ) -> Response {
     let Some((owner, name)) = parse_repo(&req.repo) else {
+        tracing::warn!(project_id = %project_id, repo = %req.repo, "github link rejected: bad format");
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(serde_json::json!({"error": "expected format 'owner/name'"})),
@@ -96,6 +97,7 @@ pub async fn link_repo(
     // env var is missing surfaces a clearer error than a 502 from the
     // validate call.
     let Some(client) = crate::github::Client::from_env() else {
+        tracing::warn!(project_id = %project_id, "github link rejected: GITHUB_TOKEN not set");
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({"error": "GITHUB_TOKEN not set on server"})),
@@ -104,6 +106,7 @@ pub async fn link_repo(
     };
 
     if let Err(e) = client.validate_repo(owner, name).await {
+        tracing::warn!(project_id = %project_id, repo = %req.repo, error = %e, "github link rejected: validate_repo failed");
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(serde_json::json!({"error": format!("{e}")})),
@@ -113,7 +116,10 @@ pub async fn link_repo(
 
     match mgr.db().set_project_github_repo(project_id, Some(&req.repo)) {
         Ok(()) => Json(LinkRepoResp { repo: req.repo }).into_response(),
-        Err(e) => crate::api::err_to_response(e),
+        Err(e) => {
+            tracing::warn!(project_id = %project_id, repo = %req.repo, error = %e, "github link rejected: db write failed");
+            crate::api::err_to_response(e)
+        }
     }
 }
 
@@ -130,6 +136,7 @@ pub async fn list_prs(
     };
 
     let Some(client) = crate::github::Client::from_env() else {
+        tracing::warn!(%project_id, "github list rejected: GITHUB_TOKEN not set");
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({"error": "GITHUB_TOKEN not set on server"})),
@@ -139,11 +146,14 @@ pub async fn list_prs(
 
     match client.list_open_prs(&owner, &name).await {
         Ok(prs) => Json(prs).into_response(),
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"error": format!("{e}")})),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::warn!(%project_id, owner = %owner, name = %name, error = %e, "github list_prs failed");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": format!("{e}")})),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -159,6 +169,7 @@ pub async fn list_issues(
     };
 
     let Some(client) = crate::github::Client::from_env() else {
+        tracing::warn!(%project_id, "github list rejected: GITHUB_TOKEN not set");
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({"error": "GITHUB_TOKEN not set on server"})),
@@ -168,11 +179,14 @@ pub async fn list_issues(
 
     match client.list_open_issues(&owner, &name).await {
         Ok(issues) => Json(issues).into_response(),
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"error": format!("{e}")})),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::warn!(%project_id, owner = %owner, name = %name, error = %e, "github list_issues failed");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": format!("{e}")})),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -197,15 +211,20 @@ fn resolve_linked_repo(
         Ok(p) => p,
         Err(crate::error::Error::ProjectNotFound(_))
         | Err(crate::error::Error::Db(rusqlite::Error::QueryReturnedNoRows)) => {
+            tracing::warn!(%project_id, "github request: project not found");
             return Err((
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({"error": "project not found"})),
             )
                 .into_response());
         }
-        Err(e) => return Err(crate::api::err_to_response(e)),
+        Err(e) => {
+            tracing::warn!(%project_id, error = %e, "github request: db lookup failed");
+            return Err(crate::api::err_to_response(e));
+        }
     };
     let stored = project.github_repo.ok_or_else(|| {
+        tracing::warn!(%project_id, "github request: no linked repo");
         (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "no linked repo"})),
@@ -214,10 +233,13 @@ fn resolve_linked_repo(
     })?;
     match parse_repo(&stored) {
         Some((o, n)) => Ok((o.to_string(), n.to_string())),
-        None => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "stored repo has bad format"})),
-        )
-            .into_response()),
+        None => {
+            tracing::warn!(%project_id, %stored, "github request: stored repo has bad format");
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "stored repo has bad format"})),
+            )
+                .into_response())
+        }
     }
 }
