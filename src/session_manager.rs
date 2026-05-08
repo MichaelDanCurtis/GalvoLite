@@ -1098,12 +1098,6 @@ impl SessionManager {
         Ok(lines.join("\n"))
     }
 
-    /// Restart-time scan: any parent with a non-NULL `waiting_on` whose listed
-    /// children already have terminal_status set should resolve immediately.
-    ///
-    /// Idempotent: replays `on_child_terminal` for already-terminal children;
-    /// `on_child_terminal` is itself idempotent so repeat calls are safe.
-
     /// Find the most recent non-terminal top-level session for a project.
     /// "Orchestrator" here means a session with no parent — the user-facing
     /// root that may spawn children. The DB schema does not store
@@ -1140,6 +1134,11 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Restart-time scan: any parent with a non-NULL `waiting_on` whose listed
+    /// children already have terminal_status set should resolve immediately.
+    ///
+    /// Idempotent: replays `on_child_terminal` for already-terminal children;
+    /// `on_child_terminal` is itself idempotent so repeat calls are safe.
     pub async fn recover_pending_rejoins(&self) -> Result<()> {
         let parents: Vec<(String, String)> = {
             let conn = self.db.pool().get()?;

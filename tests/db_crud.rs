@@ -209,5 +209,5 @@ fn set_github_repo_unknown_project_errors() {
     let db = galvolite::db::Db::open(tmp.path().join("g.db")).unwrap();
     let bogus = uuid::Uuid::new_v4();
     let err = db.set_project_github_repo(bogus, Some("x/y")).unwrap_err();
-    assert!(format!("{err:?}").contains("ProjectNotFound"));
+    assert!(matches!(err, galvolite::error::Error::ProjectNotFound(id) if id == bogus));
 }

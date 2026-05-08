@@ -59,10 +59,7 @@ pub struct LinkRepoResp {
 
 /// Parse "owner/name" into its parts. Returns None if format is invalid.
 fn parse_repo(s: &str) -> Option<(&str, &str)> {
-    let s = s.trim();
-    let mut parts = s.splitn(2, '/');
-    let owner = parts.next()?;
-    let name = parts.next()?;
+    let (owner, name) = s.trim().split_once('/')?;
     if owner.is_empty()
         || name.is_empty()
         || owner.contains(' ')
@@ -188,6 +185,10 @@ pub async fn list_issues(
 /// `Error::Db(rusqlite::Error::QueryReturnedNoRows)` rather than
 /// `Error::ProjectNotFound`, so we normalize here before delegating to
 /// `err_to_response` — same pattern as `SessionManager::delete_project`.
+#[allow(
+    clippy::result_large_err,
+    reason = "boundary-type Response is consumed at the handler immediately, no cloning"
+)]
 fn resolve_linked_repo(
     mgr: &Arc<SessionManager>,
     project_id: Uuid,

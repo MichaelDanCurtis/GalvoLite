@@ -259,11 +259,11 @@ impl Db {
     /// validation happens at the API layer before this is called.
     pub fn set_project_github_repo(&self, id: Uuid, repo: Option<&str>) -> Result<()> {
         let conn = self.pool.get()?;
-        let n = conn.execute(
+        let rows = conn.execute(
             "UPDATE projects SET github_repo = ?1 WHERE id = ?2",
             params![repo, id.to_string()],
         )?;
-        if n == 0 {
+        if rows == 0 {
             return Err(Error::ProjectNotFound(id));
         }
         Ok(())
