@@ -51,3 +51,58 @@ async fn status_returns_token_invalid_when_var_set_but_user_uncached() {
 
     std::env::remove_var("GITHUB_TOKEN");
 }
+
+use axum::http::Method;
+use galvolite::db::NewProject;
+
+#[tokio::test]
+async fn link_repo_rejects_bad_format() {
+    let _g = env_lock().lock().await;
+    std::env::set_var("GITHUB_TOKEN", "doesnt-matter");
+
+    let setup = common::test_app();
+    let p = setup.mgr.add_project(NewProject {
+        name: "p".into(),
+        path: setup._dir.path().to_string_lossy().into_owned(),
+        remote_url: None,
+    }).unwrap();
+
+    let req = Request::builder()
+        .uri(format!("/api/projects/{}/github/repo", p.id))
+        .method(Method::PUT)
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"repo":"not a valid format"}"#))
+        .unwrap();
+    let resp = setup.app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    std::env::remove_var("GITHUB_TOKEN");
+}
+
+#[tokio::test]
+async fn link_repo_503_when_token_unset() {
+    let _g = env_lock().lock().await;
+    std::env::remove_var("GITHUB_TOKEN");
+
+    let setup = common::test_app();
+    let p = setup.mgr.add_project(NewProject {
+        name: "p".into(),
+        path: setup._dir.path().to_string_lossy().into_owned(),
+        remote_url: None,
+    }).unwrap();
+
+    let req = Request::builder()
+        .uri(format!("/api/projects/{}/github/repo", p.id))
+        .method(Method::PUT)
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"repo":"octocat/hello"}"#))
+        .unwrap();
+    let resp = setup.app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+// Note: the "happy path link succeeds" case requires hitting api.github.com
+// (or a mock), which we can't easily do through the axum integration test
+// because the handler constructs a Client from env. Coverage for the
+// GitHub-side validation is in tests/github_client.rs::validate_repo_*.
+// We separately verify the DB write path via tests/db_crud.rs::project_github_repo_round_trip.
