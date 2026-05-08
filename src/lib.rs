@@ -12,6 +12,7 @@ pub mod decisions;
 pub mod directive;
 pub mod directive_watcher;
 pub mod error;
+pub mod github;
 pub mod handoff;
 pub mod hooks;
 pub mod mcp;
