@@ -21,6 +21,14 @@ vi.mock("../hooks/useProjects", () => ({
 vi.mock("../hooks/useSessionEvents", () => ({
   useSessionEvents: () => {},
 }));
+// Lifted GithubStatusBadge fetches /api/github/status on mount; stub it
+// out so the test isn't doing real network and React doesn't warn about
+// state updates outside act() when the promise resolves.
+vi.mock("../api", () => ({
+  api: {
+    githubStatus: vi.fn().mockResolvedValue({ connected: false, user: null, reason: "no token" }),
+  },
+}));
 
 describe("Dashboard nesting", () => {
   it("renders child indented under parent", () => {

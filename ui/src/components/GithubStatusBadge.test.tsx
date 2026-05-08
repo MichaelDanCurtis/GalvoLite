@@ -26,6 +26,10 @@ describe("GithubStatusBadge", () => {
     await waitFor(() => {
       expect(screen.getByText(/not connected/i)).toBeInTheDocument();
     });
+    // a11y: reason must be exposed via aria-label so screen readers
+    // surface it (title alone on a span isn't reliably announced).
+    const badge = screen.getByRole("status");
+    expect(badge.getAttribute("aria-label")).toContain("no token");
   });
 
   it("renders silently while loading then renders status", async () => {

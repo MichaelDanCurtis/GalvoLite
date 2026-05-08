@@ -32,6 +32,8 @@ export function GithubStatusBadge() {
     return (
       <span
         className="text-xs px-2 py-0.5 rounded bg-neutral-800 text-neutral-300"
+        role="status"
+        aria-label={`GitHub connected as ${status.user.login}`}
         title="GitHub connected"
       >
         @{status.user.login}
@@ -42,6 +44,8 @@ export function GithubStatusBadge() {
   return (
     <span
       className="text-xs px-2 py-0.5 rounded bg-neutral-800 text-yellow-500"
+      role="status"
+      aria-label={`GitHub: ${status.reason ?? "not connected"}`}
       title={`GitHub: ${status.reason ?? "not connected"}`}
     >
       GitHub: not connected

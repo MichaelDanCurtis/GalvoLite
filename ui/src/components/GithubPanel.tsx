@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { api } from "../api";
 import type { GithubPr, GithubIssue } from "../types";
 
@@ -18,7 +18,13 @@ export function GithubPanel({ projectId, repo }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Track the latest in-flight fetch so a stale projectId-change response
+  // can't overwrite a fresh one. Each fetch captures its own token; only
+  // the run that still matches `latestRun.current` writes state.
+  const latestRun = useRef(0);
+
   const fetchAll = useCallback(async () => {
+    const myRun = ++latestRun.current;
     setBusy(true);
     setError(null);
     try {
@@ -26,16 +32,27 @@ export function GithubPanel({ projectId, repo }: Props) {
         api.listGithubPrs(projectId),
         api.listGithubIssues(projectId),
       ]);
-      setPrs(p);
-      setIssues(i);
+      if (latestRun.current === myRun) {
+        setPrs(p);
+        setIssues(i);
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (latestRun.current === myRun) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
-      setBusy(false);
+      if (latestRun.current === myRun) {
+        setBusy(false);
+      }
     }
   }, [projectId]);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  useEffect(() => {
+    fetchAll();
+    // Bump the run counter on cleanup so a fetch in flight when projectId
+    // changes can't write back to state with stale data.
+    return () => { latestRun.current++; };
+  }, [fetchAll]);
 
   return (
     <div className="border border-neutral-700 rounded p-3 mt-2">
@@ -58,7 +75,7 @@ export function GithubPanel({ projectId, repo }: Props) {
 
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <div className="text-xs text-neutral-500 mb-1">Open PRs</div>
+          <h3 className="text-xs text-neutral-500 mb-1 font-normal">Open PRs</h3>
           {prs === null ? (
             <div className="text-xs text-neutral-600">Loading…</div>
           ) : prs.length === 0 ? (
@@ -85,7 +102,7 @@ export function GithubPanel({ projectId, repo }: Props) {
         </div>
 
         <div>
-          <div className="text-xs text-neutral-500 mb-1">Open issues</div>
+          <h3 className="text-xs text-neutral-500 mb-1 font-normal">Open issues</h3>
           {issues === null ? (
             <div className="text-xs text-neutral-600">Loading…</div>
           ) : issues.length === 0 ? (

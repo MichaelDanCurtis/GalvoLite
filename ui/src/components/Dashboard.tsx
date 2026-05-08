@@ -146,7 +146,6 @@ export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
           {selectedProject && (
             <>
               <ExecutePlanButton projectId={selectedProject} />
-              <GithubStatusBadge />
               <RecBell
                 projectId={selectedProject}
                 degraded={overseerDegraded}
@@ -161,6 +160,7 @@ export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
           )}
         </div>
         <div className="flex items-center gap-4 text-sm">
+          <GithubStatusBadge />
           <span className="text-gray-400">
             {activeCount} active
           </span>
