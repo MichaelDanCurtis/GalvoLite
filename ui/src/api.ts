@@ -12,6 +12,9 @@ import type {
   Postmortem,
   Decision,
   Recommendation,
+  GithubStatus,
+  GithubPr,
+  GithubIssue,
 } from "./types";
 
 const BASE = "";
@@ -212,4 +215,20 @@ export const api = {
       `/api/projects/${projectId}/recommendations/explain`,
       { method: "POST", body: JSON.stringify({ rec_id: recId, rationale }) },
     ),
+
+  // Plan 10a — GitHub read-only endpoints
+
+  githubStatus: () => request<GithubStatus>("/api/github/status"),
+
+  linkGithubRepo: (projectId: string, repo: string) =>
+    request<{ repo: string }>(
+      `/api/projects/${projectId}/github/repo`,
+      { method: "PUT", body: JSON.stringify({ repo }) },
+    ),
+
+  listGithubPrs: (projectId: string) =>
+    request<GithubPr[]>(`/api/projects/${projectId}/github/prs`),
+
+  listGithubIssues: (projectId: string) =>
+    request<GithubIssue[]>(`/api/projects/${projectId}/github/issues`),
 };
