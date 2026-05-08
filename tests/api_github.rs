@@ -5,15 +5,21 @@ mod common;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use serde_json::Value;
-use std::sync::Mutex;
+use std::sync::OnceLock;
+use tokio::sync::Mutex;
 use tower::ServiceExt;
 
-// Tests share env vars; serialize with a process-wide mutex.
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+// Tests share env vars; serialize with a process-wide async mutex so the
+// guard can be held across `.await` points without tripping
+// clippy::await_holding_lock.
+fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 #[tokio::test]
 async fn status_returns_not_connected_when_token_unset() {
-    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = env_lock().lock().await;
     std::env::remove_var("GITHUB_TOKEN");
 
     let setup = common::test_app();
@@ -31,7 +37,7 @@ async fn status_returns_not_connected_when_token_unset() {
 
 #[tokio::test]
 async fn status_returns_token_invalid_when_var_set_but_user_uncached() {
-    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = env_lock().lock().await;
     std::env::set_var("GITHUB_TOKEN", "fake-for-test");
 
     let setup = common::test_app();
