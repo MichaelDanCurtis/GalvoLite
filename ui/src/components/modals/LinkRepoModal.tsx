@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { api } from "../api";
+import { api } from "../../api";
+import { Modal } from "./Modal";
 
 interface Props {
   projectId: string;
@@ -18,9 +19,8 @@ export function LinkRepoModal({ projectId, open, onClose, onSaved }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!open) return null;
-
   const submit = async () => {
+    if (busy || repo.trim().length === 0) return;
     setBusy(true);
     setError(null);
     try {
@@ -49,13 +49,15 @@ export function LinkRepoModal({ projectId, open, onClose, onSaved }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-neutral-900 rounded-lg shadow-xl p-4 w-[420px]">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold">Link GitHub repo</h2>
-          <button onClick={onClose} className="text-neutral-400 hover:text-white">×</button>
-        </div>
-        <p className="text-sm text-neutral-400 mb-2">
+    <Modal open={open} onClose={onClose} title="Link GitHub repo">
+      <form
+        className="flex flex-col gap-2 text-sm text-neutral-300"
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+      >
+        <p className="text-sm text-neutral-400">
           Enter the repo as <code className="text-neutral-200">owner/name</code>.
         </p>
         <input
@@ -63,25 +65,33 @@ export function LinkRepoModal({ projectId, open, onClose, onSaved }: Props) {
           placeholder="owner/name"
           value={repo}
           onChange={(e) => setRepo(e.target.value)}
-          className="w-full text-sm bg-neutral-800 border border-neutral-700 rounded p-2 mb-2"
+          className="w-full text-sm bg-neutral-800 border border-neutral-700 rounded p-2"
           disabled={busy}
+          autoFocus
         />
         {error && (
-          <div className="text-xs text-red-400 mb-2 whitespace-pre-wrap">{error}</div>
+          <div className="text-xs text-red-400 whitespace-pre-wrap" role="alert">
+            {error}
+          </div>
         )}
-        <div className="flex gap-2 justify-end">
+        <div className="flex gap-2 justify-end mt-1">
           <button
+            type="button"
             className="px-3 py-1 rounded bg-neutral-700 hover:bg-neutral-600 text-white text-xs"
             onClick={onClose}
             disabled={busy}
-          >Cancel</button>
+          >
+            Cancel
+          </button>
           <button
+            type="submit"
             className="px-3 py-1 rounded bg-blue-700 hover:bg-blue-600 text-white text-xs disabled:opacity-50"
-            onClick={submit}
             disabled={busy || repo.trim().length === 0}
-          >Save</button>
+          >
+            Save
+          </button>
         </div>
-      </div>
-    </div>
+      </form>
+    </Modal>
   );
 }

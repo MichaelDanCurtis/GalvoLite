@@ -18,7 +18,7 @@ import { PostmortemsPanel } from "./PostmortemsPanel";
 import { RecBell } from "./RecBell";
 import { GithubStatusBadge } from "./GithubStatusBadge";
 import { GithubPanel } from "./GithubPanel";
-import { LinkRepoModal } from "./LinkRepoModal";
+import { LinkRepoModal } from "./modals/LinkRepoModal";
 import { RecModal } from "./RecModal";
 import { ExecutePlanButton } from "./ExecutePlanButton";
 import type { Project, DomainEvent, Session } from "../types";

@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import { LinkRepoModal } from "./LinkRepoModal";
-import { api } from "../api";
+import { api } from "../../api";
 
 describe("LinkRepoModal", () => {
   it("save success closes modal and calls onSaved", async () => {
