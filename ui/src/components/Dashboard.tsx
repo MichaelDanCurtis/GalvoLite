@@ -16,6 +16,7 @@ import { HandoffModal } from "./modals/HandoffModal";
 import { EndSessionModal } from "./modals/EndSessionModal";
 import { PostmortemsPanel } from "./PostmortemsPanel";
 import { RecBell } from "./RecBell";
+import { GithubStatusBadge } from "./GithubStatusBadge";
 import { RecModal } from "./RecModal";
 import { ExecutePlanButton } from "./ExecutePlanButton";
 import type { Project, DomainEvent, Session } from "../types";
@@ -142,6 +143,7 @@ export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
           {selectedProject && (
             <>
               <ExecutePlanButton projectId={selectedProject} />
+              <GithubStatusBadge />
               <RecBell
                 projectId={selectedProject}
                 degraded={overseerDegraded}
