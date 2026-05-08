@@ -56,6 +56,11 @@ pub struct SessionManager {
     /// running process); phase advancement is low-frequency so contention is
     /// negligible.
     phase_advancement_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Plan 10a Task 3 — connected GitHub user, validated once at startup.
+    /// `None` if `GITHUB_TOKEN` was unset or `Client::validate()` failed.
+    /// The status handler reads from this cache; it never touches GitHub on
+    /// the request path.
+    connected_github_user: Arc<std::sync::RwLock<Option<crate::github::User>>>,
 }
 
 impl SessionManager {
@@ -91,7 +96,20 @@ impl SessionManager {
             operator_registry: OperatorPromptRegistry::new(),
             project_watchers: StdMutex::new(HashMap::new()),
             phase_advancement_lock: Arc::new(tokio::sync::Mutex::new(())),
+            connected_github_user: Arc::new(std::sync::RwLock::new(None)),
         }
+    }
+
+    /// Plan 10a Task 3 — read the cached connected GitHub user. Returns
+    /// `None` if no token was set or validation failed at startup.
+    pub fn github_user(&self) -> Option<crate::github::User> {
+        self.connected_github_user.read().unwrap().clone()
+    }
+
+    /// Plan 10a Task 3 — set the cached connected user. Called once at
+    /// startup after `Client::validate()` succeeds.
+    pub fn set_github_user(&self, user: Option<crate::github::User>) {
+        *self.connected_github_user.write().unwrap() = user;
     }
 
     /// Shared handle to the `ask_operator` pending-prompt registry. The MCP

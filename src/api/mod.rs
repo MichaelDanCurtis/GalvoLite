@@ -6,6 +6,7 @@
 pub mod auth;
 pub mod events;
 pub mod execute_plan;
+pub mod github;
 pub mod hook_handlers;
 pub mod hooks;
 pub mod decisions;
@@ -72,6 +73,7 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
             post(recommendations::explain),
         )
         .route("/api/operator/prompt/:id/answer", post(operator::answer))
+        .route("/api/github/status", get(github::status))
         .route("/mcp", post(crate::mcp::transport::handle))
         .layer(CorsLayer::permissive())
         .with_state(mgr);

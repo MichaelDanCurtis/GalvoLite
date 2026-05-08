@@ -1,0 +1,47 @@
+//! Plan 10a Task 3+ — API tests for the GitHub endpoints.
+
+mod common;
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use serde_json::Value;
+use std::sync::Mutex;
+use tower::ServiceExt;
+
+// Tests share env vars; serialize with a process-wide mutex.
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+#[tokio::test]
+async fn status_returns_not_connected_when_token_unset() {
+    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::remove_var("GITHUB_TOKEN");
+
+    let setup = common::test_app();
+    let resp = setup.app.oneshot(
+        Request::builder().uri("/api/github/status").body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["connected"], false);
+    assert_eq!(v["reason"], "no token");
+    assert!(v["user"].is_null());
+}
+
+#[tokio::test]
+async fn status_returns_token_invalid_when_var_set_but_user_uncached() {
+    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("GITHUB_TOKEN", "fake-for-test");
+
+    let setup = common::test_app();
+    let resp = setup.app.oneshot(
+        Request::builder().uri("/api/github/status").body(Body::empty()).unwrap()
+    ).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["connected"], false);
+    assert_eq!(v["reason"], "token invalid");
+
+    std::env::remove_var("GITHUB_TOKEN");
+}

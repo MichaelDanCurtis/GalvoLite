@@ -226,6 +226,24 @@ async fn shutdown_signal() {
 }
 
 async fn cmd_serve(mgr: Arc<SessionManager>, host: String, port: u16) -> Result<()> {
+    // Plan 10a Task 3 — validate GITHUB_TOKEN at startup; cache the
+    // connected user on the manager. Best-effort: if no token or
+    // validation fails, the cache stays None and the dashboard shows
+    // "GitHub: not connected".
+    if let Some(client) = galvolite::github::Client::from_env() {
+        match client.validate().await {
+            Ok(user) => {
+                tracing::info!(login = %user.login, "GitHub PAT validated");
+                mgr.set_github_user(Some(user));
+            }
+            Err(e) => {
+                tracing::warn!(error = ?e, "GitHub PAT validation failed; running disconnected");
+            }
+        }
+    } else {
+        tracing::info!("GITHUB_TOKEN not set; GitHub features disabled");
+    }
+
     let app = galvolite::api::router(mgr.clone());
 
     let addr = format!("{host}:{port}");
