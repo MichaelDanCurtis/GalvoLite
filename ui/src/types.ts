@@ -8,6 +8,7 @@ export interface Project {
   path: string;
   remote_url: string | null;
   created_at: string;
+  github_repo?: string | null; // Plan 10a — null/absent when not linked
 }
 
 export interface Session {
@@ -189,4 +190,34 @@ export interface Recommendation {
   created_at: string;
   acted_at: string | null;
   deferred_until: string | null;
+}
+
+// Plan 10a — GitHub read-only types
+export interface GithubUser {
+  login: string;
+  avatar_url: string;
+}
+
+export interface GithubStatus {
+  connected: boolean;
+  user: GithubUser | null;
+  reason: string | null;
+}
+
+export interface GithubPr {
+  number: number;
+  title: string;
+  author: string;
+  draft: boolean;
+  updated_at: string;
+  url: string;
+}
+
+export interface GithubIssue {
+  number: number;
+  title: string;
+  author: string;
+  labels: string[];
+  updated_at: string;
+  url: string;
 }

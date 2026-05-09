@@ -16,6 +16,7 @@ const SCHEMA_V3: &str = include_str!("../migrations/0003_session_spawn.sql");
 const SCHEMA_V4: &str = include_str!("../migrations/0004_overseer_executor.sql");
 const SCHEMA_V5: &str = include_str!("../migrations/0005_pending_phases.sql");
 const SCHEMA_V6: &str = include_str!("../migrations/0006_rec_archived.sql");
+const SCHEMA_V7: &str = include_str!("../migrations/0007_projects_github_repo.sql");
 
 /// (version, sql_body). Order matters: applied lowest-to-highest. Each entry
 /// is applied iff the version is not present in `schema_version`.
@@ -26,6 +27,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (4, SCHEMA_V4),
     (5, SCHEMA_V5),
     (6, SCHEMA_V6),
+    (7, SCHEMA_V7),
 ];
 
 #[derive(Clone)]
@@ -136,6 +138,8 @@ pub struct Project {
     pub path: String,
     pub remote_url: Option<String>,
     pub created_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_repo: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -205,13 +209,14 @@ impl Db {
             path: new.path,
             remote_url: new.remote_url,
             created_at: now,
+            github_repo: None,
         })
     }
 
     pub fn get_project(&self, id: Uuid) -> Result<Project> {
         let conn = self.pool.get()?;
         let row = conn.query_row(
-            "SELECT id, name, path, remote_url, created_at
+            "SELECT id, name, path, remote_url, created_at, github_repo
              FROM projects WHERE id = ?1",
             params![id.to_string()],
             |r| {
@@ -221,6 +226,7 @@ impl Db {
                     path: r.get(2)?,
                     remote_url: r.get(3)?,
                     created_at: parse_datetime(&r.get::<_, String>(4)?)?,
+                    github_repo: r.get(5)?,
                 })
             },
         )?;
@@ -230,7 +236,8 @@ impl Db {
     pub fn list_projects(&self) -> Result<Vec<Project>> {
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
-            "SELECT id, name, path, remote_url, created_at FROM projects ORDER BY created_at ASC",
+            "SELECT id, name, path, remote_url, created_at, github_repo
+             FROM projects ORDER BY created_at ASC",
         )?;
         let rows = stmt
             .query_map([], |r| {
@@ -240,10 +247,26 @@ impl Db {
                     path: r.get(2)?,
                     remote_url: r.get(3)?,
                     created_at: parse_datetime(&r.get::<_, String>(4)?)?,
+                    github_repo: r.get(5)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Plan 10a Task 1 — set or clear the linked GitHub repo for a project.
+    /// Pass `None` to clear. The value is stored verbatim; format/existence
+    /// validation happens at the API layer before this is called.
+    pub fn set_project_github_repo(&self, id: Uuid, repo: Option<&str>) -> Result<()> {
+        let conn = self.pool.get()?;
+        let rows = conn.execute(
+            "UPDATE projects SET github_repo = ?1 WHERE id = ?2",
+            params![repo, id.to_string()],
+        )?;
+        if rows == 0 {
+            return Err(Error::ProjectNotFound(id));
+        }
+        Ok(())
     }
 
     /// Cascade-delete a project: every signal, cycle, session row and finally

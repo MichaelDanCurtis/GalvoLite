@@ -16,6 +16,9 @@ import { HandoffModal } from "./modals/HandoffModal";
 import { EndSessionModal } from "./modals/EndSessionModal";
 import { PostmortemsPanel } from "./PostmortemsPanel";
 import { RecBell } from "./RecBell";
+import { GithubStatusBadge } from "./GithubStatusBadge";
+import { GithubPanel } from "./GithubPanel";
+import { LinkRepoModal } from "./modals/LinkRepoModal";
 import { RecModal } from "./RecModal";
 import { ExecutePlanButton } from "./ExecutePlanButton";
 import type { Project, DomainEvent, Session } from "../types";
@@ -36,7 +39,7 @@ interface DashboardProps {
 }
 
 export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
-  const { projects, createProject, removeProject } = useProjects();
+  const { projects, createProject, removeProject, refresh: refreshProjects } = useProjects();
   const {
     sessions,
     refresh,
@@ -55,6 +58,7 @@ export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
   const [modal, setModal] = useState<null | "send" | "handoff" | "end">(null);
   const [recModalOpen, setRecModalOpen] = useState(false);
   const [overseerDegraded, setOverseerDegraded] = useState(false);
+  const [linkModalProjectId, setLinkModalProjectId] = useState<string | null>(null);
 
   const bridgeHandler = useCallback(
     (e: DomainEvent) => {
@@ -156,6 +160,7 @@ export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
           )}
         </div>
         <div className="flex items-center gap-4 text-sm">
+          <GithubStatusBadge />
           <span className="text-gray-400">
             {activeCount} active
           </span>
@@ -166,6 +171,23 @@ export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
           )}
         </div>
       </header>
+
+      {selectedProject && (() => {
+        const project = projects.find((p) => p.id === selectedProject);
+        if (!project) return null;
+        return (
+          <div className="px-4 py-2 border-b border-gray-800 bg-gray-900">
+            {project.github_repo ? (
+              <GithubPanel projectId={project.id} repo={project.github_repo} />
+            ) : (
+              <button
+                className="text-xs text-neutral-500 hover:text-neutral-300 underline"
+                onClick={() => setLinkModalProjectId(project.id)}
+              >Link GitHub repo</button>
+            )}
+          </div>
+        );
+      })()}
 
       <div className="flex flex-1 overflow-hidden">
         <div className="flex-1 overflow-auto">
@@ -256,6 +278,16 @@ export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
           />
         </>
       )}
+
+      <LinkRepoModal
+        projectId={linkModalProjectId ?? ""}
+        open={linkModalProjectId !== null}
+        onClose={() => setLinkModalProjectId(null)}
+        onSaved={() => {
+          setLinkModalProjectId(null);
+          refreshProjects();
+        }}
+      />
 
       {/* Per-session event subscriptions — renders nothing, keeps subscriptions
           alive for all sessions regardless of the current project filter. */}

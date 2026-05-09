@@ -174,8 +174,40 @@ fn project_serializes_to_json() {
         path: "/tmp/test".into(),
         remote_url: None,
         created_at: chrono::Utc::now(),
+        github_repo: None,
     };
     let json = serde_json::to_value(&p).unwrap();
     assert_eq!(json["name"], "test");
     assert_eq!(json["path"], "/tmp/test");
+    // skip_serializing_if hides absent github_repo to keep JSON shape stable.
+    assert!(json.get("github_repo").is_none(), "absent github_repo must not appear");
+}
+
+#[test]
+fn project_github_repo_round_trip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = galvolite::db::Db::open(tmp.path().join("g.db")).unwrap();
+    let p = db.insert_project(galvolite::db::NewProject {
+        name: "p".into(),
+        path: tmp.path().to_string_lossy().into_owned(),
+        remote_url: None,
+    }).unwrap();
+    assert_eq!(p.github_repo, None, "fresh project has no linked repo");
+
+    db.set_project_github_repo(p.id, Some("octocat/hello-world")).unwrap();
+    let p2 = db.get_project(p.id).unwrap();
+    assert_eq!(p2.github_repo.as_deref(), Some("octocat/hello-world"));
+
+    db.set_project_github_repo(p.id, None).unwrap();
+    let p3 = db.get_project(p.id).unwrap();
+    assert_eq!(p3.github_repo, None);
+}
+
+#[test]
+fn set_github_repo_unknown_project_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = galvolite::db::Db::open(tmp.path().join("g.db")).unwrap();
+    let bogus = uuid::Uuid::new_v4();
+    let err = db.set_project_github_repo(bogus, Some("x/y")).unwrap_err();
+    assert!(matches!(err, galvolite::error::Error::ProjectNotFound(id) if id == bogus));
 }
