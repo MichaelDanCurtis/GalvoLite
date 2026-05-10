@@ -77,6 +77,10 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route("/api/projects/:id/github/repo", put(github::link_repo))
         .route("/api/projects/:id/github/prs", get(github::list_prs))
         .route("/api/projects/:id/github/issues", get(github::list_issues))
+        .route(
+            "/api/projects/:id/github/issues/:number/spawn",
+            post(github::spawn_from_issue),
+        )
         .route("/api/sessions/:id/pr-draft", get(github::pr_draft))
         .route("/api/sessions/:id/pr", post(github::open_pr))
         .route("/api/sessions/:id/pr-reviews", get(github::pr_reviews))

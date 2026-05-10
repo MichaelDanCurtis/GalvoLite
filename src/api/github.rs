@@ -612,6 +612,124 @@ pub async fn pr_reviews(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Plan 10d Task 3 — `POST /api/projects/:id/github/issues/:number/spawn`.
+//
+// Fetches a single issue, finds the project's orchestrator session, spawns a
+// child session under it with the issue title as task_summary, and writes
+// the issue body to `<worktree>/.galvolite/issue.md` for reference.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct SpawnFromIssueResp {
+    pub session_id: Uuid,
+}
+
+/// `POST /api/projects/:id/github/issues/:number/spawn` — fetches issue,
+/// spawns child session under the project's orchestrator with issue
+/// title in task_summary + issue body written to `<worktree>/.galvolite/issue.md`.
+pub async fn spawn_from_issue(
+    State(mgr): State<Arc<SessionManager>>,
+    Path((project_id, number)): Path<(Uuid, u64)>,
+) -> Response {
+    let project = match mgr.db().get_project(project_id) {
+        Ok(p) => p,
+        Err(crate::error::Error::ProjectNotFound(_))
+        | Err(crate::error::Error::Db(rusqlite::Error::QueryReturnedNoRows)) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "project not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => return crate::api::err_to_response(e),
+    };
+    let Some(repo_str) = project.github_repo.as_ref() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "no linked repo"})),
+        )
+            .into_response();
+    };
+    let Some((owner, name)) = parse_repo(repo_str) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "stored repo has bad format"})),
+        )
+            .into_response();
+    };
+
+    let Some(orchestrator) = mgr.find_orchestrator_for_project(project_id) else {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "no orchestrator session running"})),
+        )
+            .into_response();
+    };
+
+    let Some(client) = crate::github::Client::from_env() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "GITHUB_TOKEN not set on server"})),
+        )
+            .into_response();
+    };
+
+    let issue = match client.get_issue(owner, name, number).await {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::warn!(%project_id, %number, error = %e, "get_issue failed");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": format!("{e}")})),
+            )
+                .into_response();
+        }
+    };
+
+    let task = if issue.title.chars().count() > 200 {
+        issue.title.chars().take(200).collect::<String>()
+    } else {
+        issue.title.clone()
+    };
+
+    let new_session = match mgr
+        .spawn_child(orchestrator.id, "implementation", &task, None)
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => return crate::api::err_to_response(e),
+    };
+
+    // Write issue body to the new worktree's .galvolite/issue.md so the
+    // operator/Claude can reference it (best-effort; failures don't roll back).
+    let issue_md =
+        std::path::PathBuf::from(&new_session.worktree_path).join(".galvolite/issue.md");
+    if let Some(parent) = issue_md.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let content = format!(
+        "# {}\n\n{}\n\n---\n_From: {}_\n",
+        issue.title, issue.body, issue.html_url
+    );
+    if let Err(e) = std::fs::write(&issue_md, content) {
+        tracing::warn!(?issue_md, error = %e, "failed to write .galvolite/issue.md");
+    }
+
+    // Track the issue link on the session row.
+    if let Err(e) = mgr
+        .db()
+        .set_session_github_issue_url(new_session.id, Some(&issue.html_url))
+    {
+        tracing::warn!(session_id = %new_session.id, error = ?e, "set_session_github_issue_url failed");
+    }
+
+    Json(SpawnFromIssueResp {
+        session_id: new_session.id,
+    })
+    .into_response()
+}
+
 /// Helper: load session + parent project, returning the appropriate
 /// error response on missing session/project or DB failure. Mirrors the
 /// `resolve_linked_repo` shape but works at session granularity since

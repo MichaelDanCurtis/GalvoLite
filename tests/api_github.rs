@@ -411,3 +411,78 @@ async fn pr_reviews_503_when_token_unset() {
     ).await.unwrap();
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
+
+// ---------------------------------------------------------------------------
+// Plan 10d Task 3 — `POST /api/projects/:id/github/issues/:number/spawn`
+// error-path coverage. Happy path requires hitting api.github.com (or a
+// mock) plus a real worktree to spawn into; here we exercise the routing/
+// state branches that gate the GitHub call + spawn.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn spawn_from_issue_404_when_no_linked_repo() {
+    let _g = env_lock().lock().await;
+    std::env::set_var("GITHUB_TOKEN", "x");
+    let setup = common::test_app();
+    let project = setup.mgr.add_project(NewProject {
+        name: "p".into(),
+        path: setup._dir.path().to_string_lossy().into_owned(),
+        remote_url: None,
+    }).unwrap();
+    let req = Request::builder()
+        .uri(format!("/api/projects/{}/github/issues/7/spawn", project.id))
+        .method(HttpMethod::POST)
+        .body(Body::empty()).unwrap();
+    let resp = setup.app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    std::env::remove_var("GITHUB_TOKEN");
+}
+
+#[tokio::test]
+async fn spawn_from_issue_503_when_token_unset() {
+    let _g = env_lock().lock().await;
+    std::env::remove_var("GITHUB_TOKEN");
+    let setup = common::test_app();
+    let project = setup.mgr.add_project(NewProject {
+        name: "p".into(),
+        path: setup._dir.path().to_string_lossy().into_owned(),
+        remote_url: None,
+    }).unwrap();
+    setup.db.set_project_github_repo(project.id, Some("octocat/hello")).unwrap();
+    // Insert a "fake orchestrator" so we get past the 409 check.
+    setup.db.insert_session(NewSession {
+        project_id: project.id,
+        role: "implementation".into(),
+        branch: None,
+        worktree_path: setup._dir.path().to_string_lossy().into_owned(),
+        task_summary: "orch".into(),
+        parent_session_id: None,
+    }).unwrap();
+    let req = Request::builder()
+        .uri(format!("/api/projects/{}/github/issues/7/spawn", project.id))
+        .method(HttpMethod::POST)
+        .body(Body::empty()).unwrap();
+    let resp = setup.app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn spawn_from_issue_409_when_no_orchestrator() {
+    let _g = env_lock().lock().await;
+    std::env::set_var("GITHUB_TOKEN", "x");
+    let setup = common::test_app();
+    let project = setup.mgr.add_project(NewProject {
+        name: "p".into(),
+        path: setup._dir.path().to_string_lossy().into_owned(),
+        remote_url: None,
+    }).unwrap();
+    setup.db.set_project_github_repo(project.id, Some("octocat/hello")).unwrap();
+    // No session inserted = no orchestrator.
+    let req = Request::builder()
+        .uri(format!("/api/projects/{}/github/issues/7/spawn", project.id))
+        .method(HttpMethod::POST)
+        .body(Body::empty()).unwrap();
+    let resp = setup.app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    std::env::remove_var("GITHUB_TOKEN");
+}
