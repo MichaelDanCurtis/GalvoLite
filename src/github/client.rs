@@ -34,6 +34,15 @@ pub struct IssueSummary {
     pub url: String,
 }
 
+/// Plan 10b — created-PR info returned by `create_pull_request`. The
+/// `html_url` is what we persist on the session row; `number` is for
+/// future webhook-correlation work.
+#[derive(Debug, Clone, Serialize)]
+pub struct PrInfo {
+    pub number: u64,
+    pub html_url: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum GithubError {
     #[error("github api: {0}")]
@@ -158,12 +167,51 @@ impl Client {
             .map_err(map_err)?;
         Ok(())
     }
+
+    /// Plan 10b — fetch the repo's default branch name (e.g. "main" or
+    /// "master"). Used to pre-populate the base-branch field in the
+    /// OpenPrModal. Caller falls back to "main" on Err.
+    pub async fn default_branch(&self, owner: &str, name: &str) -> Result<String, GithubError> {
+        let repo = self.inner.repos(owner, name).get().await.map_err(map_err)?;
+        Ok(repo.default_branch.unwrap_or_else(|| "main".to_string()))
+    }
+
+    /// Plan 10b — create a PR via `POST /repos/{owner}/{name}/pulls`.
+    /// Returns the html_url + number on success; surfaces octocrab's
+    /// error verbatim on failure (e.g. 422 if a PR already exists for
+    /// the head branch on the remote, 404 if base branch missing).
+    pub async fn create_pull_request(
+        &self,
+        owner: &str,
+        name: &str,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+        draft: bool,
+    ) -> Result<PrInfo, GithubError> {
+        let pr = self
+            .inner
+            .pulls(owner, name)
+            .create(title, head, base)
+            .body(body)
+            .draft(draft)
+            .send()
+            .await
+            .map_err(map_err)?;
+        Ok(PrInfo {
+            number: pr.number,
+            html_url: pr.html_url.map(|u| u.to_string()).unwrap_or_default(),
+        })
+    }
 }
 
 fn map_err(e: octocrab::Error) -> GithubError {
-    // octocrab::Error is non-exhaustive; the Display impl is informative
-    // enough for our purposes (UI surfaces it verbatim).
-    let s = format!("{e}");
+    // octocrab::Error is non-exhaustive. Its Display impl only renders the
+    // variant name (e.g. "GitHub") which is useless for surfacing 422
+    // validation errors to the UI; Debug includes status code + message
+    // body. Plan 10b — UI shows the raw string, so prefer Debug here.
+    let s = format!("{e:?}");
     if s.contains("connect") || s.contains("dns") || s.contains("timeout") {
         GithubError::Network(s)
     } else {

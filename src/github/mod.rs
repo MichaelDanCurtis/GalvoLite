@@ -6,4 +6,4 @@
 
 pub mod client;
 
-pub use client::{Client, IssueSummary, PrSummary, User};
+pub use client::{Client, IssueSummary, PrInfo, PrSummary, User};
