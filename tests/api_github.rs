@@ -264,3 +264,83 @@ async fn pr_draft_503_when_token_unset() {
     ).await.unwrap();
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
+
+// ---------------------------------------------------------------------------
+// Plan 10b Task 6 — `POST /api/sessions/:id/pr` error-path coverage.
+// Happy path requires a real GitHub call + a real worktree to push from, so
+// we cover routing/state branches here. The GitHub call itself is exercised
+// in tests/github_client.rs::create_pull_request_returns_pr_info_on_201, and
+// the push helper in tests/github_push.rs::push_fails_with_redacted_token_*.
+// ---------------------------------------------------------------------------
+
+use axum::http::Method as HttpMethod;
+
+#[tokio::test]
+async fn open_pr_422_when_pr_url_already_set() {
+    let _g = env_lock().lock().await;
+    std::env::set_var("GITHUB_TOKEN", "x");
+
+    let setup = common::test_app();
+    let project = setup.mgr.add_project(NewProject {
+        name: "p".into(),
+        path: setup._dir.path().to_string_lossy().into_owned(),
+        remote_url: None,
+    }).unwrap();
+    setup.db.set_project_github_repo(project.id, Some("octocat/hello")).unwrap();
+    let session = setup.db.insert_session(NewSession {
+        project_id: project.id,
+        role: "implementation".into(),
+        branch: Some("galvolite/abc12345".into()),
+        worktree_path: setup._dir.path().to_string_lossy().into_owned(),
+        task_summary: "test".into(),
+        parent_session_id: None,
+    }).unwrap();
+    // Pre-populate pr_url to simulate a PR that already exists.
+    setup.db.set_session_pr_url(session.id, Some("https://github.com/octocat/hello/pull/1")).unwrap();
+
+    let req = Request::builder()
+        .uri(format!("/api/sessions/{}/pr", session.id))
+        .method(HttpMethod::POST)
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"title":"t","body":"b","base":"main"}"#))
+        .unwrap();
+    let resp = setup.app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["pr_url"], "https://github.com/octocat/hello/pull/1");
+
+    std::env::remove_var("GITHUB_TOKEN");
+}
+
+#[tokio::test]
+async fn open_pr_503_when_token_unset() {
+    let _g = env_lock().lock().await;
+    std::env::remove_var("GITHUB_TOKEN");
+
+    let setup = common::test_app();
+    let project = setup.mgr.add_project(NewProject {
+        name: "p".into(),
+        path: setup._dir.path().to_string_lossy().into_owned(),
+        remote_url: None,
+    }).unwrap();
+    setup.db.set_project_github_repo(project.id, Some("octocat/hello")).unwrap();
+    let session = setup.db.insert_session(NewSession {
+        project_id: project.id,
+        role: "implementation".into(),
+        branch: Some("galvolite/abc12345".into()),
+        worktree_path: setup._dir.path().to_string_lossy().into_owned(),
+        task_summary: "test".into(),
+        parent_session_id: None,
+    }).unwrap();
+
+    let req = Request::builder()
+        .uri(format!("/api/sessions/{}/pr", session.id))
+        .method(HttpMethod::POST)
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"title":"t","body":"b","base":"main"}"#))
+        .unwrap();
+    let resp = setup.app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}

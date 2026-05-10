@@ -385,6 +385,134 @@ pub async fn pr_draft(
     .into_response()
 }
 
+// ---------------------------------------------------------------------------
+// Plan 10b Task 6 — `POST /api/sessions/:id/pr`.
+//
+// Pushes the session's branch via the `github::push` helper, then opens a
+// PR via `github::Client::create_pull_request`. On success persists the
+// returned `html_url` into `sessions.pr_url` and emits the
+// `SessionPrCreated` domain event. Reuses `resolve_session_for_pr` and
+// `parse_repo` helpers from the pr-draft handler above.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct OpenPrReq {
+    pub title: String,
+    pub body: String,
+    pub base: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OpenPrResp {
+    pub pr_url: String,
+    pub pr_number: u64,
+}
+
+/// `POST /api/sessions/:id/pr` — push the session's branch and open a PR.
+/// Returns 200 with `{pr_url, pr_number}` on success. 422 if a PR already
+/// exists (`session.pr_url` is set); 503 if no token; 502 on push or PR
+/// creation failure (with token-redacted error from push or octocrab
+/// error from PR creation).
+pub async fn open_pr(
+    State(mgr): State<Arc<SessionManager>>,
+    Path(session_id): Path<Uuid>,
+    Json(req): Json<OpenPrReq>,
+) -> Response {
+    let (session, project) = match resolve_session_for_pr(&mgr, session_id) {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
+
+    if let Some(existing) = session.pr_url.as_ref() {
+        tracing::warn!(%session_id, %existing, "open_pr rejected: PR already exists");
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "PR already exists for this session",
+                "pr_url": existing,
+            })),
+        )
+            .into_response();
+    }
+
+    let Some(repo_str) = project.github_repo.as_ref() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "no linked repo"})),
+        )
+            .into_response();
+    };
+    let Some((owner, name)) = parse_repo(repo_str) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "stored repo has bad format"})),
+        )
+            .into_response();
+    };
+    let Some(branch) = session.branch.as_deref() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "session has no branch"})),
+        )
+            .into_response();
+    };
+
+    let Some(client) = crate::github::Client::from_env() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "GITHUB_TOKEN not set on server"})),
+        )
+            .into_response();
+    };
+    let token = std::env::var("GITHUB_TOKEN").unwrap_or_default();
+
+    // Push branch first.
+    let worktree = std::path::PathBuf::from(&session.worktree_path);
+    if let Err(e) = crate::github::push::push_branch(&worktree, branch, owner, name, &token) {
+        tracing::warn!(%session_id, error = %e, "git push failed");
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": format!("{e}")})),
+        )
+            .into_response();
+    }
+
+    // Create PR.
+    let pr_info = match client
+        .create_pull_request(owner, name, branch, &req.base, &req.title, &req.body, false)
+        .await
+    {
+        Ok(info) => info,
+        Err(e) => {
+            tracing::warn!(%session_id, error = %e, "create_pull_request failed");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": format!("{e}")})),
+            )
+                .into_response();
+        }
+    };
+
+    // Persist + emit event.
+    if let Err(e) = mgr.db().set_session_pr_url(session_id, Some(&pr_info.html_url)) {
+        tracing::warn!(%session_id, error = ?e, "set_session_pr_url failed after PR created");
+        return crate::api::err_to_response(e);
+    }
+    mgr.event_bus()
+        .publish(crate::api::events::DomainEvent::SessionPrCreated {
+            session_id,
+            project_id: session.project_id,
+            pr_url: pr_info.html_url.clone(),
+            pr_number: pr_info.number,
+        });
+
+    Json(OpenPrResp {
+        pr_url: pr_info.html_url,
+        pr_number: pr_info.number,
+    })
+    .into_response()
+}
+
 /// Helper: load session + parent project, returning the appropriate
 /// error response on missing session/project or DB failure. Mirrors the
 /// `resolve_linked_repo` shape but works at session granularity since
