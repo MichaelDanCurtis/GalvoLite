@@ -5,5 +5,7 @@
 //! the API state and is shared with all handlers.
 
 pub mod client;
+pub mod push;
 
-pub use client::{Client, IssueSummary, PrSummary, User};
+pub use client::{Client, IssueSummary, PrInfo, PrSummary, User};
+pub use push::PushError;

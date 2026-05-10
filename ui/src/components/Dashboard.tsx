@@ -247,6 +247,7 @@ export function Dashboard({ onGlobalEvent }: DashboardProps = {}) {
       {expanded && (
         <ExpandedSessionView
           session={expanded}
+          project={projects.find((p) => p.id === expanded.project_id)}
           onClose={collapse}
           onSend={() => setModal("send")}
           onHandoff={() => setModal("handoff")}

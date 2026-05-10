@@ -235,6 +235,26 @@ async fn cmd_serve(mgr: Arc<SessionManager>, host: String, port: u16) -> Result<
             Ok(user) => {
                 tracing::info!(login = %user.login, "GitHub PAT validated");
                 mgr.set_github_user(Some(user));
+                // Plan 10b Task 4 — advisory warning if 'repo' write
+                // scope is missing (Plan 10b PR creation needs it).
+                // Empty scopes are NOT a warning — fine-grained PATs
+                // don't populate `x-oauth-scopes` at all.
+                match client.token_scopes().await {
+                    Ok(scopes)
+                        if !scopes.is_empty()
+                            && !scopes.iter().any(|s| s == "repo" || s == "public_repo") =>
+                    {
+                        tracing::warn!(
+                            scopes = ?scopes,
+                            "GITHUB_TOKEN lacks 'repo' write scope — Plan 10b PR creation will fail; \
+                             rotate the PAT to add 'repo' or 'public_repo' write scope"
+                        );
+                    }
+                    Ok(_) => {} // scopes contain repo/public_repo, OR scopes empty (fine-grained PAT)
+                    Err(e) => {
+                        tracing::debug!(error = ?e, "could not fetch token scopes; skipping advisory check");
+                    }
+                }
             }
             Err(e) => {
                 tracing::warn!(error = ?e, "GitHub PAT validation failed; running disconnected");

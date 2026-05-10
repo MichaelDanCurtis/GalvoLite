@@ -34,6 +34,15 @@ pub struct IssueSummary {
     pub url: String,
 }
 
+/// Plan 10b — created-PR info returned by `create_pull_request`. The
+/// `html_url` is what we persist on the session row; `number` is for
+/// future webhook-correlation work.
+#[derive(Debug, Clone, Serialize)]
+pub struct PrInfo {
+    pub number: u64,
+    pub html_url: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum GithubError {
     #[error("github api: {0}")]
@@ -158,12 +167,92 @@ impl Client {
             .map_err(map_err)?;
         Ok(())
     }
+
+    /// Plan 10b — fetch the repo's default branch name (e.g. "main" or
+    /// "master"). Used to pre-populate the base-branch field in the
+    /// OpenPrModal. Caller falls back to "main" on Err.
+    pub async fn default_branch(&self, owner: &str, name: &str) -> Result<String, GithubError> {
+        let repo = self.inner.repos(owner, name).get().await.map_err(map_err)?;
+        Ok(repo.default_branch.unwrap_or_else(|| "main".to_string()))
+    }
+
+    /// Plan 10b Task 4 — fetch the comma-separated `x-oauth-scopes`
+    /// header from `GET /user`. Returns Vec of trimmed scope strings,
+    /// or empty Vec if the header is absent (which can happen if the
+    /// PAT has no scopes set, common for fine-grained PATs).
+    ///
+    /// Uses octocrab's low-level `_get` so we get back the raw
+    /// `http::Response` and can read response headers — the typed
+    /// `current().user()` path only deserializes the body.
+    pub async fn token_scopes(&self) -> Result<Vec<String>, GithubError> {
+        let resp = self.inner._get("/user").await.map_err(map_err)?;
+        let scopes = resp
+            .headers()
+            .get("x-oauth-scopes")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| {
+                s.split(',')
+                    .map(|x| x.trim().to_string())
+                    .filter(|x| !x.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(scopes)
+    }
+
+    /// Plan 10b — create a PR via `POST /repos/{owner}/{name}/pulls`.
+    /// Returns the html_url + number on success; surfaces octocrab's
+    /// error verbatim on failure (e.g. 422 if a PR already exists for
+    /// the head branch on the remote, 404 if base branch missing).
+    // Single internal caller (open_pr handler); a builder/struct would be
+    // YAGNI for 8 args, all of which are required and all of which the
+    // caller already has in scope.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_pull_request(
+        &self,
+        owner: &str,
+        name: &str,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+        draft: bool,
+    ) -> Result<PrInfo, GithubError> {
+        let pr = self
+            .inner
+            .pulls(owner, name)
+            .create(title, head, base)
+            .body(body)
+            .draft(draft)
+            .send()
+            .await
+            .map_err(map_err)?;
+        Ok(PrInfo {
+            number: pr.number,
+            html_url: pr.html_url.map(|u| u.to_string()).unwrap_or_default(),
+        })
+    }
 }
 
+/// Map an `octocrab::Error` into our two-variant `GithubError`.
+///
+/// `octocrab::Error` is non-exhaustive. Its `Display` impl only renders
+/// the variant name (e.g. "GitHub"), which is useless for surfacing 422
+/// validation errors to the UI; `Debug` includes the status code +
+/// response body, so we prefer it.
+///
+/// The `Network` vs `Api` split is best-effort: we substring-match the
+/// Debug repr for "connect" / "dns" / "timeout" rather than pattern-match
+/// the variant. This can misclassify if octocrab ever embeds those
+/// substrings in a non-network context (e.g. a GitHub error message that
+/// happens to contain the word "timeout"). For Plan 10b that's
+/// cosmetic — both variants are surfaced by current callers as a 502
+/// with the same string body, so the distinction is purely for log
+/// readability. If a future caller needs to differentiate (e.g. retry
+/// only on `Network`), tighten this to variant-pattern matching against
+/// `octocrab::Error::Hyper` / `octocrab::Error::Http` etc.
 fn map_err(e: octocrab::Error) -> GithubError {
-    // octocrab::Error is non-exhaustive; the Display impl is informative
-    // enough for our purposes (UI surfaces it verbatim).
-    let s = format!("{e}");
+    let s = format!("{e:?}");
     if s.contains("connect") || s.contains("dns") || s.contains("timeout") {
         GithubError::Network(s)
     } else {

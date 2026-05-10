@@ -211,3 +211,40 @@ fn set_github_repo_unknown_project_errors() {
     let err = db.set_project_github_repo(bogus, Some("x/y")).unwrap_err();
     assert!(matches!(err, galvolite::error::Error::ProjectNotFound(id) if id == bogus));
 }
+
+#[test]
+fn session_pr_url_round_trip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = galvolite::db::Db::open(tmp.path().join("g.db")).unwrap();
+    let project = db.insert_project(galvolite::db::NewProject {
+        name: "p".into(),
+        path: tmp.path().to_string_lossy().into_owned(),
+        remote_url: None,
+    }).unwrap();
+    let session = db.insert_session(galvolite::db::NewSession {
+        project_id: project.id,
+        role: "implementation".into(),
+        branch: Some("galvolite/abc12345".into()),
+        worktree_path: tmp.path().join("wt").to_string_lossy().into_owned(),
+        task_summary: "test session".into(),
+        parent_session_id: None,
+    }).unwrap();
+    assert_eq!(session.pr_url, None, "fresh session has no pr_url");
+
+    db.set_session_pr_url(session.id, Some("https://github.com/octocat/hello/pull/42")).unwrap();
+    let s2 = db.get_session(session.id).unwrap();
+    assert_eq!(s2.pr_url.as_deref(), Some("https://github.com/octocat/hello/pull/42"));
+
+    db.set_session_pr_url(session.id, None).unwrap();
+    let s3 = db.get_session(session.id).unwrap();
+    assert_eq!(s3.pr_url, None);
+}
+
+#[test]
+fn set_session_pr_url_unknown_session_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = galvolite::db::Db::open(tmp.path().join("g.db")).unwrap();
+    let bogus = uuid::Uuid::new_v4();
+    let err = db.set_session_pr_url(bogus, Some("https://example/pr/1")).unwrap_err();
+    assert!(matches!(err, galvolite::error::Error::SessionNotFound(id) if id == bogus));
+}

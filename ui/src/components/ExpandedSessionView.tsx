@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import type { DomainEvent, EventRow, PlanStep, Session } from "../types";
+import type { DomainEvent, EventRow, PlanStep, Project, Session } from "../types";
 import { api } from "../api";
 import { useSessionEvents } from "../hooks/useSessionEvents";
 import { TerminalPreview } from "./TerminalPreview";
@@ -11,11 +11,17 @@ import { PlanTab } from "./PlanTab";
 import { MetaTab } from "./MetaTab";
 import { DirectiveTab } from "./DirectiveTab";
 import { TabPanel } from "./TabPanel";
+import { OpenPrModal } from "./modals/OpenPrModal";
 
 type Tab = "terminal" | "events" | "plan" | "meta" | "directive";
 
 interface Props {
   session: Session;
+  /** Owning project — used to gate the "Open PR" button on `github_repo`.
+   *  Optional so existing callers (and tests) can omit it; when absent the
+   *  button is hidden but a "View PR" link still renders if `session.pr_url`
+   *  is set. */
+  project?: Project;
   onClose: () => void;
   onSend: (origin: DOMRect) => void;
   onHandoff: (origin: DOMRect) => void;
@@ -25,12 +31,14 @@ interface Props {
 
 export function ExpandedSessionView({
   session,
+  project,
   onClose,
   onSend,
   onHandoff,
   onEnd,
   onToggleAutopilot,
 }: Props) {
+  const [openPrModalOpen, setOpenPrModalOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("terminal");
   const [events, setEvents] = useState<EventRow[]>([]);
   const [loadError, setLoadError] = useState(false);
@@ -166,9 +174,24 @@ export function ExpandedSessionView({
         onClick={(e) => e.stopPropagation()}
       >
         <header className="px-4 py-2 border-b border-neutral-800 flex items-center justify-between text-xs text-neutral-300">
-          <div>
-            <RoleBadge role={session.role} />{" "}
+          <div className="flex items-center gap-2">
+            <RoleBadge role={session.role} />
             <span className="opacity-50">· {session.id} · {session.state}</span>
+            {session.pr_url ? (
+              <a
+                href={session.pr_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs px-2 py-0.5 rounded bg-neutral-800 text-blue-400 hover:underline"
+              >View PR</a>
+            ) : (
+              session.branch && project?.github_repo && (
+                <button
+                  className="text-xs px-2 py-0.5 rounded bg-neutral-700 hover:bg-neutral-600"
+                  onClick={() => setOpenPrModalOpen(true)}
+                >Open PR</button>
+              )
+            )}
           </div>
           <div className="opacity-60">ESC or click outside to close</div>
         </header>
@@ -234,6 +257,16 @@ export function ExpandedSessionView({
           />
         </div>
       </motion.div>
+      <OpenPrModal
+        sessionId={session.id}
+        open={openPrModalOpen}
+        onClose={() => setOpenPrModalOpen(false)}
+        onCreated={() => {
+          setOpenPrModalOpen(false);
+          // Local state update happens via the SessionPrCreated bus event;
+          // see Dashboard's bridgeHandler / useSessions.applyEvent.
+        }}
+      />
     </motion.div>
   );
 }

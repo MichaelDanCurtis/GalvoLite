@@ -17,6 +17,7 @@ const SCHEMA_V4: &str = include_str!("../migrations/0004_overseer_executor.sql")
 const SCHEMA_V5: &str = include_str!("../migrations/0005_pending_phases.sql");
 const SCHEMA_V6: &str = include_str!("../migrations/0006_rec_archived.sql");
 const SCHEMA_V7: &str = include_str!("../migrations/0007_projects_github_repo.sql");
+const SCHEMA_V8: &str = include_str!("../migrations/0008_sessions_pr_url.sql");
 
 /// (version, sql_body). Order matters: applied lowest-to-highest. Each entry
 /// is applied iff the version is not present in `schema_version`.
@@ -28,6 +29,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (5, SCHEMA_V5),
     (6, SCHEMA_V6),
     (7, SCHEMA_V7),
+    (8, SCHEMA_V8),
 ];
 
 #[derive(Clone)]
@@ -173,6 +175,8 @@ pub struct Session {
     pub pending_overseer_recs: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_phases_json: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -354,6 +358,7 @@ impl Db {
             terminal_status: None,
             pending_overseer_recs: None,
             pending_phases_json: None,
+            pr_url: None,
         })
     }
 
@@ -363,7 +368,7 @@ impl Db {
             "SELECT id, project_id, role, branch, worktree_path, pty_pid, state,
                     autopilot, parent_session_id, task_summary, created_at, ended_at,
                     waiting_on, pending_rejoin, terminal_status, pending_overseer_recs,
-                    pending_phases_json
+                    pending_phases_json, pr_url
              FROM sessions WHERE id = ?1",
             params![id.to_string()],
             |r| {
@@ -402,6 +407,7 @@ impl Db {
                     terminal_status: r.get(14)?,
                     pending_overseer_recs: r.get(15)?,
                     pending_phases_json: r.get(16)?,
+                    pr_url: r.get(17)?,
                 })
             },
         )
@@ -417,7 +423,7 @@ impl Db {
             "SELECT id, project_id, role, branch, worktree_path, pty_pid, state,
                     autopilot, parent_session_id, task_summary, created_at, ended_at,
                     waiting_on, pending_rejoin, terminal_status, pending_overseer_recs,
-                    pending_phases_json
+                    pending_phases_json, pr_url
              FROM sessions WHERE ended_at IS NULL ORDER BY created_at ASC",
         )?;
         let rows = stmt
@@ -460,6 +466,7 @@ impl Db {
                     terminal_status: r.get(14)?,
                     pending_overseer_recs: r.get(15)?,
                     pending_phases_json: r.get(16)?,
+                    pr_url: r.get(17)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -737,6 +744,21 @@ impl Db {
         let rows = conn.execute(
             "UPDATE sessions SET handoff_path = ?1 WHERE id = ?2",
             params![path, id.to_string()],
+        )?;
+        if rows == 0 {
+            return Err(Error::SessionNotFound(id));
+        }
+        Ok(())
+    }
+
+    /// Plan 10b Task 1 — set or clear the PR URL for a session. Pass
+    /// `None` to clear (e.g. if a future PR-detach action is added).
+    /// Returns `Error::SessionNotFound` if the id is unknown.
+    pub fn set_session_pr_url(&self, id: Uuid, url: Option<&str>) -> Result<()> {
+        let conn = self.pool.get()?;
+        let rows = conn.execute(
+            "UPDATE sessions SET pr_url = ?1 WHERE id = ?2",
+            params![url, id.to_string()],
         )?;
         if rows == 0 {
             return Err(Error::SessionNotFound(id));

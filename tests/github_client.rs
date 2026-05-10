@@ -275,3 +275,187 @@ async fn validate_repo_err_on_404() {
     let client = Client::with_token("t", Some(server.url())).unwrap();
     assert!(client.validate_repo("octocat", "missing").await.is_err());
 }
+
+// ===== Plan 10b Task 2 — default_branch + create_pull_request =====
+
+fn mock_repo_payload_with_default_branch(default_branch: &str) -> String {
+    let owner = author_json("octocat", 1);
+    format!(
+        r#"{{
+            "id": 1,
+            "node_id": "x",
+            "name": "hello",
+            "full_name": "octocat/hello",
+            "private": false,
+            "owner": {owner},
+            "html_url": "https://github.com/octocat/hello",
+            "description": null,
+            "fork": false,
+            "url": "https://api.github.com/repos/octocat/hello",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "pushed_at": "2026-01-01T00:00:00Z",
+            "clone_url": "https://github.com/octocat/hello.git",
+            "size": 0,
+            "stargazers_count": 0,
+            "watchers_count": 0,
+            "forks_count": 0,
+            "open_issues_count": 0,
+            "default_branch": "{default_branch}"
+        }}"#
+    )
+}
+
+#[tokio::test]
+async fn default_branch_returns_value_from_response() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("GET", "/repos/octocat/hello")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(mock_repo_payload_with_default_branch("trunk"))
+        .create_async()
+        .await;
+
+    let client = Client::with_token("t", Some(server.url())).unwrap();
+    let branch = client.default_branch("octocat", "hello").await.unwrap();
+    assert_eq!(branch, "trunk");
+}
+
+fn mock_pr_create_payload() -> String {
+    let octocat = author_json("octocat", 1);
+    format!(
+        r#"{{
+            "url": "https://api.github.com/repos/octocat/hello/pulls/42",
+            "id": 999,
+            "node_id": "x",
+            "html_url": "https://github.com/octocat/hello/pull/42",
+            "diff_url": "https://github.com/octocat/hello/pull/42.diff",
+            "patch_url": "https://github.com/octocat/hello/pull/42.patch",
+            "issue_url": "https://api.github.com/repos/octocat/hello/issues/42",
+            "number": 42,
+            "state": "open",
+            "locked": false,
+            "title": "Add token-budget reset",
+            "user": {octocat},
+            "body": "...",
+            "created_at": "2026-05-09T00:00:00Z",
+            "updated_at": "2026-05-09T00:00:00Z",
+            "closed_at": null,
+            "merged_at": null,
+            "merge_commit_sha": null,
+            "draft": false,
+            "head": {{"label":"octocat:galvolite/abc12345","ref":"galvolite/abc12345","sha":"abc","user":null,"repo":null}},
+            "base": {{"label":"octocat:main","ref":"main","sha":"def","user":null,"repo":null}},
+            "_links": {{}},
+            "author_association": "OWNER"
+        }}"#
+    )
+}
+
+#[tokio::test]
+async fn create_pull_request_returns_pr_info_on_201() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("POST", "/repos/octocat/hello/pulls")
+        .with_status(201)
+        .with_header("content-type", "application/json")
+        .with_body(mock_pr_create_payload())
+        .create_async()
+        .await;
+
+    let client = Client::with_token("t", Some(server.url())).unwrap();
+    let info = client
+        .create_pull_request(
+            "octocat",
+            "hello",
+            "galvolite/abc12345",
+            "main",
+            "Add token-budget reset",
+            "## Task\n...",
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(info.number, 42);
+    assert_eq!(info.html_url, "https://github.com/octocat/hello/pull/42");
+}
+
+#[tokio::test]
+async fn create_pull_request_err_on_422() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("POST", "/repos/octocat/hello/pulls")
+        .with_status(422)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"message":"Validation Failed","errors":[{"resource":"PullRequest","code":"custom","message":"A pull request already exists for octocat:galvolite/abc12345."}]}"#)
+        .create_async()
+        .await;
+
+    let client = Client::with_token("t", Some(server.url())).unwrap();
+    let err = client
+        .create_pull_request(
+            "octocat",
+            "hello",
+            "galvolite/abc12345",
+            "main",
+            "x",
+            "y",
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert!(format!("{err}").contains("422") || format!("{err}").contains("Validation"));
+}
+
+#[tokio::test]
+async fn default_branch_err_on_404() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("GET", "/repos/octocat/missing")
+        .with_status(404)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"message":"Not Found"}"#)
+        .create_async()
+        .await;
+
+    let client = Client::with_token("t", Some(server.url())).unwrap();
+    assert!(client.default_branch("octocat", "missing").await.is_err());
+}
+
+// ===== Plan 10b Task 4 — token_scopes (x-oauth-scopes header parsing) =====
+
+#[tokio::test]
+async fn token_scopes_parses_x_oauth_scopes_header() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("GET", "/user")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_header("x-oauth-scopes", "repo, read:org, workflow")
+        .with_body(mock_user_payload())
+        .create_async()
+        .await;
+
+    let client = Client::with_token("t", Some(server.url())).unwrap();
+    let scopes = client.token_scopes().await.unwrap();
+    assert!(scopes.contains(&"repo".to_string()));
+    assert!(scopes.contains(&"read:org".to_string()));
+    assert!(scopes.contains(&"workflow".to_string()));
+}
+
+#[tokio::test]
+async fn token_scopes_returns_empty_when_header_absent() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("GET", "/user")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(mock_user_payload())
+        .create_async()
+        .await;
+
+    let client = Client::with_token("t", Some(server.url())).unwrap();
+    let scopes = client.token_scopes().await.unwrap();
+    assert!(scopes.is_empty());
+}

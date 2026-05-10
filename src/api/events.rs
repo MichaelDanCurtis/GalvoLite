@@ -93,6 +93,13 @@ pub enum DomainEvent {
     OverseerDegraded { project_id: Uuid, reason: String },
     #[serde(rename = "overseer.recovered")]
     OverseerRecovered { project_id: Uuid },
+    #[serde(rename = "session.pr_created")]
+    SessionPrCreated {
+        session_id: Uuid,
+        project_id: Uuid,
+        pr_url: String,
+        pr_number: u64,
+    },
     #[serde(rename = "project.added")]
     ProjectAdded { project_id: Uuid },
     #[serde(rename = "project.deleted")]
@@ -146,7 +153,8 @@ impl DomainEvent {
             | DomainEvent::OperatorPrompt { session_id, .. }
             | DomainEvent::OperatorToast { session_id, .. }
             | DomainEvent::SessionResumed { session_id, .. }
-            | DomainEvent::SessionChildrenResolved { session_id, .. } => *session_id == sid,
+            | DomainEvent::SessionChildrenResolved { session_id, .. }
+            | DomainEvent::SessionPrCreated { session_id, .. } => *session_id == sid,
             DomainEvent::DirectiveChanged { .. }
             | DomainEvent::PostmortemWritten { .. }
             | DomainEvent::DecisionRecorded { .. }
