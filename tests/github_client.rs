@@ -545,6 +545,73 @@ async fn list_pr_reviews_returns_bundle_on_success() {
         .contains("discussion_r200"));
 }
 
+// ===== Plan 10d — get_issue (single issue detail for spawn flow) =====
+
+fn mock_single_issue_payload() -> String {
+    let alice = author_json("alice", 7);
+    format!(
+        r#"{{
+            "url": "https://api.github.com/repos/octocat/hello/issues/7",
+            "repository_url": "https://api.github.com/repos/octocat/hello",
+            "labels_url": "https://api.github.com/repos/octocat/hello/issues/7/labels{{/name}}",
+            "comments_url": "https://api.github.com/repos/octocat/hello/issues/7/comments",
+            "events_url": "https://api.github.com/repos/octocat/hello/issues/7/events",
+            "id": 99,
+            "node_id": "x",
+            "html_url": "https://github.com/octocat/hello/issues/7",
+            "number": 7,
+            "state": "open",
+            "state_reason": null,
+            "title": "Bug: thing broken",
+            "body": "Reproduces when…",
+            "user": {alice},
+            "labels": [],
+            "assignee": null,
+            "assignees": [],
+            "milestone": null,
+            "locked": false,
+            "comments": 0,
+            "closed_at": null,
+            "created_at": "2026-05-01T00:00:00Z",
+            "updated_at": "2026-05-01T00:00:00Z",
+            "author_association": "CONTRIBUTOR"
+        }}"#
+    )
+}
+
+#[tokio::test]
+async fn get_issue_returns_detail_on_200() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("GET", "/repos/octocat/hello/issues/7")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(mock_single_issue_payload())
+        .create_async()
+        .await;
+
+    let client = Client::with_token("t", Some(server.url())).unwrap();
+    let issue = client.get_issue("octocat", "hello", 7).await.unwrap();
+    assert_eq!(issue.number, 7);
+    assert_eq!(issue.title, "Bug: thing broken");
+    assert!(issue.body.contains("Reproduces"));
+    assert_eq!(issue.html_url, "https://github.com/octocat/hello/issues/7");
+}
+
+#[tokio::test]
+async fn get_issue_err_on_404() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("GET", "/repos/octocat/hello/issues/9999")
+        .with_status(404)
+        .with_body(r#"{"message":"Not Found"}"#)
+        .create_async()
+        .await;
+
+    let client = Client::with_token("t", Some(server.url())).unwrap();
+    assert!(client.get_issue("octocat", "hello", 9999).await.is_err());
+}
+
 #[tokio::test]
 async fn list_pr_reviews_err_on_404() {
     let mut server = mockito::Server::new_async().await;

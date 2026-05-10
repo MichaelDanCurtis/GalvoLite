@@ -33,6 +33,7 @@ export interface Session {
   last_event_kind?: string;
   waiting_on?: string[] | null;
   pr_url?: string | null; // Plan 10b — PR URL once "Open PR" has been used
+  github_issue_url?: string | null; // Plan 10d — set when session was spawned from a GitHub issue
 }
 
 /**
@@ -266,4 +267,9 @@ export interface PrReviewComment {
 export interface PrReviewsBundle {
   reviews: PrReview[];
   comments: PrReviewComment[];
+}
+
+// Plan 10d — Issue → Session Spawn
+export interface SpawnFromIssueResp {
+  session_id: string;
 }

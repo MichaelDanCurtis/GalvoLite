@@ -34,6 +34,15 @@ pub struct IssueSummary {
     pub url: String,
 }
 
+/// Plan 10d — single-issue detail for the spawn flow.
+#[derive(Debug, Clone, Serialize)]
+pub struct IssueDetail {
+    pub number: u64,
+    pub title: String,
+    pub body: String,
+    pub html_url: String,
+}
+
 /// Plan 10b — created-PR info returned by `create_pull_request`. The
 /// `html_url` is what we persist on the session row; `number` is for
 /// future webhook-correlation work.
@@ -282,6 +291,27 @@ impl Client {
             .collect();
 
         Ok(PrReviewsBundle { reviews, comments })
+    }
+
+    /// Plan 10d — fetch a single issue by number.
+    pub async fn get_issue(
+        &self,
+        owner: &str,
+        name: &str,
+        number: u64,
+    ) -> Result<IssueDetail, GithubError> {
+        let issue = self
+            .inner
+            .issues(owner, name)
+            .get(number)
+            .await
+            .map_err(map_err)?;
+        Ok(IssueDetail {
+            number: issue.number,
+            title: issue.title,
+            body: issue.body.unwrap_or_default(),
+            html_url: issue.html_url.to_string(),
+        })
     }
 
     /// Plan 10b — create a PR via `POST /repos/{owner}/{name}/pulls`.

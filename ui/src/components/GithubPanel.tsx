@@ -17,6 +17,8 @@ export function GithubPanel({ projectId, repo }: Props) {
   const [issues, setIssues] = useState<GithubIssue[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [spawnBusy, setSpawnBusy] = useState<number | null>(null); // issue number being spawned
+  const [spawnError, setSpawnError] = useState<string | null>(null);
 
   // Track the latest in-flight fetch so a stale projectId-change response
   // can't overwrite a fresh one. Each fetch captures its own token; only
@@ -73,6 +75,10 @@ export function GithubPanel({ projectId, repo }: Props) {
         </div>
       )}
 
+      {spawnError && (
+        <div className="text-xs text-red-400 mb-2">Spawn error: {spawnError}</div>
+      )}
+
       <div className="grid grid-cols-2 gap-3">
         <div>
           <h3 className="text-xs text-neutral-500 mb-1 font-normal">Open PRs</h3>
@@ -125,6 +131,21 @@ export function GithubPanel({ projectId, repo }: Props) {
                       [{i.labels.join(", ")}]
                     </span>
                   )}
+                  <button
+                    className="ml-2 text-[10px] px-1 py-0.5 rounded bg-blue-700 hover:bg-blue-600 text-white disabled:opacity-50"
+                    disabled={spawnBusy !== null}
+                    onClick={async () => {
+                      setSpawnBusy(i.number);
+                      setSpawnError(null);
+                      try {
+                        await api.spawnFromIssue(projectId, i.number);
+                      } catch (e) {
+                        setSpawnError(e instanceof Error ? e.message : String(e));
+                      } finally {
+                        setSpawnBusy(null);
+                      }
+                    }}
+                  >Start session</button>
                 </li>
               ))}
             </ul>

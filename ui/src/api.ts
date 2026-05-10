@@ -19,6 +19,7 @@ import type {
   OpenPrReq,
   OpenPrResp,
   PrReviewsBundle,
+  SpawnFromIssueResp,
 } from "./types";
 
 const BASE = "";
@@ -250,4 +251,11 @@ export const api = {
   // Plan 10c — PR reviews
   getPrReviews: (sessionId: string) =>
     request<PrReviewsBundle>(`/api/sessions/${sessionId}/pr-reviews`),
+
+  // Plan 10d — Issue → Session Spawn
+  spawnFromIssue: (projectId: string, issueNumber: number) =>
+    request<SpawnFromIssueResp>(
+      `/api/projects/${projectId}/github/issues/${issueNumber}/spawn`,
+      { method: "POST" },
+    ),
 };
