@@ -54,4 +54,20 @@ describe("GithubPanel", () => {
       expect(screen.getByText(/rate limited/i)).toBeInTheDocument();
     });
   });
+
+  it("Start session button calls spawnFromIssue", async () => {
+    vi.spyOn(api, "listGithubPrs").mockResolvedValue([]);
+    vi.spyOn(api, "listGithubIssues").mockResolvedValue([
+      { number: 7, title: "Bug", author: "alice", labels: [], updated_at: "2026-05-01T00:00:00Z", url: "https://github.com/x/y/issues/7" }
+    ]);
+    const spawn = vi.fn().mockResolvedValue({ session_id: "new-id" });
+    vi.spyOn(api, "spawnFromIssue").mockImplementation(spawn);
+
+    render(<GithubPanel projectId="p" repo="x/y" />);
+    await screen.findByText("Bug");
+    fireEvent.click(screen.getByRole("button", { name: /start session/i }));
+    await waitFor(() => {
+      expect(spawn).toHaveBeenCalledWith("p", 7);
+    });
+  });
 });
