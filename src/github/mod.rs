@@ -6,9 +6,11 @@
 
 pub mod client;
 pub mod push;
+pub mod webhook;
 
 pub use client::{
     Client, IssueDetail, IssueSummary, PrInfo, PrReviewsBundle, PrSummary, ReviewCommentSummary,
     ReviewSummary, User,
 };
 pub use push::PushError;
+pub use webhook::WebhookError;
