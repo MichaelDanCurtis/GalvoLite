@@ -344,3 +344,70 @@ async fn open_pr_503_when_token_unset() {
     let resp = setup.app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
+
+// ---------------------------------------------------------------------------
+// Plan 10c — `GET /api/sessions/:id/pr-reviews` error-path coverage.
+// Happy path requires hitting api.github.com (or a mock) — that's covered by
+// tests/github_client.rs::list_pr_reviews_*. Here we exercise the routing/
+// state branches that gate the GitHub call.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn pr_reviews_404_when_no_pr_url() {
+    let _g = env_lock().lock().await;
+    std::env::set_var("GITHUB_TOKEN", "x");
+
+    let setup = common::test_app();
+    let project = setup.mgr.add_project(NewProject {
+        name: "p".into(),
+        path: setup._dir.path().to_string_lossy().into_owned(),
+        remote_url: None,
+    }).unwrap();
+    setup.db.set_project_github_repo(project.id, Some("octocat/hello")).unwrap();
+    let session = setup.db.insert_session(NewSession {
+        project_id: project.id,
+        role: "implementation".into(),
+        branch: Some("galvolite/abc".into()),
+        worktree_path: setup._dir.path().to_string_lossy().into_owned(),
+        task_summary: "test".into(),
+        parent_session_id: None,
+    }).unwrap();
+    // No pr_url set.
+    let resp = setup.app.oneshot(
+        Request::builder()
+            .uri(format!("/api/sessions/{}/pr-reviews", session.id))
+            .body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    std::env::remove_var("GITHUB_TOKEN");
+}
+
+#[tokio::test]
+async fn pr_reviews_503_when_token_unset() {
+    let _g = env_lock().lock().await;
+    std::env::remove_var("GITHUB_TOKEN");
+
+    let setup = common::test_app();
+    let project = setup.mgr.add_project(NewProject {
+        name: "p".into(),
+        path: setup._dir.path().to_string_lossy().into_owned(),
+        remote_url: None,
+    }).unwrap();
+    setup.db.set_project_github_repo(project.id, Some("octocat/hello")).unwrap();
+    let session = setup.db.insert_session(NewSession {
+        project_id: project.id,
+        role: "implementation".into(),
+        branch: Some("galvolite/abc".into()),
+        worktree_path: setup._dir.path().to_string_lossy().into_owned(),
+        task_summary: "test".into(),
+        parent_session_id: None,
+    }).unwrap();
+    setup.db.set_session_pr_url(session.id, Some("https://github.com/octocat/hello/pull/42")).unwrap();
+    let resp = setup.app.oneshot(
+        Request::builder()
+            .uri(format!("/api/sessions/{}/pr-reviews", session.id))
+            .body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}

@@ -459,3 +459,116 @@ async fn token_scopes_returns_empty_when_header_absent() {
     let scopes = client.token_scopes().await.unwrap();
     assert!(scopes.is_empty());
 }
+
+// ===== Plan 10c — list_pr_reviews (reviews + inline comments) =====
+
+fn mock_review_payload() -> String {
+    let alice = author_json("alice", 5);
+    format!(
+        r#"[{{
+            "id": 100,
+            "node_id": "x",
+            "user": {alice},
+            "body": "LGTM",
+            "state": "APPROVED",
+            "html_url": "https://github.com/octocat/hello/pull/42#pullrequestreview-100",
+            "pull_request_url": "https://api.github.com/repos/octocat/hello/pulls/42",
+            "_links": {{}},
+            "submitted_at": "2026-05-01T00:00:00Z",
+            "commit_id": "abc",
+            "author_association": "OWNER"
+        }}]"#
+    )
+}
+
+fn mock_review_comment_payload() -> String {
+    let bob = author_json("bob", 6);
+    format!(
+        r#"[{{
+            "url": "https://api.github.com/repos/octocat/hello/pulls/comments/200",
+            "pull_request_review_id": 100,
+            "id": 200,
+            "node_id": "x",
+            "diff_hunk": "@@ -1,1 +1,1 @@",
+            "path": "src/main.rs",
+            "commit_id": "abc",
+            "original_commit_id": "abc",
+            "user": {bob},
+            "body": "consider extracting this",
+            "created_at": "2026-05-01T00:00:00Z",
+            "updated_at": "2026-05-01T00:00:00Z",
+            "html_url": "https://github.com/octocat/hello/pull/42#discussion_r200",
+            "pull_request_url": "https://api.github.com/repos/octocat/hello/pulls/42",
+            "author_association": "CONTRIBUTOR",
+            "_links": {{}},
+            "line": 42,
+            "original_line": 42
+        }}]"#
+    )
+}
+
+#[tokio::test]
+async fn list_pr_reviews_returns_bundle_on_success() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("GET", "/repos/octocat/hello/pulls/42/reviews")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(mock_review_payload())
+        .create_async()
+        .await;
+    server
+        .mock("GET", "/repos/octocat/hello/pulls/42/comments")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(mock_review_comment_payload())
+        .create_async()
+        .await;
+
+    let client = Client::with_token("t", Some(server.url())).unwrap();
+    let bundle = client
+        .list_pr_reviews("octocat", "hello", 42)
+        .await
+        .expect("list_pr_reviews");
+    assert_eq!(bundle.reviews.len(), 1);
+    assert_eq!(bundle.reviews[0].author, "alice");
+    assert!(bundle.reviews[0].state.contains("APPROVED"));
+    assert_eq!(bundle.reviews[0].body, "LGTM");
+    assert_eq!(bundle.comments.len(), 1);
+    assert_eq!(bundle.comments[0].author, "bob");
+    assert_eq!(bundle.comments[0].path, "src/main.rs");
+    assert_eq!(bundle.comments[0].line, Some(42));
+    assert!(bundle.comments[0]
+        .url
+        .contains("discussion_r200"));
+}
+
+#[tokio::test]
+async fn list_pr_reviews_err_on_404() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("GET", "/repos/octocat/hello/pulls/9999/reviews")
+        .match_query(mockito::Matcher::Any)
+        .with_status(404)
+        .with_body(r#"{"message":"Not Found"}"#)
+        .create_async()
+        .await;
+    // Comments mock not strictly required since tokio::join! returns
+    // both errors; one suffices, but providing it makes the test stable
+    // regardless of which leg races first.
+    server
+        .mock("GET", "/repos/octocat/hello/pulls/9999/comments")
+        .match_query(mockito::Matcher::Any)
+        .with_status(404)
+        .with_body(r#"{"message":"Not Found"}"#)
+        .create_async()
+        .await;
+
+    let client = Client::with_token("t", Some(server.url())).unwrap();
+    assert!(client
+        .list_pr_reviews("octocat", "hello", 9999)
+        .await
+        .is_err());
+}
