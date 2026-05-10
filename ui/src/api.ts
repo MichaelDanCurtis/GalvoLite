@@ -15,6 +15,9 @@ import type {
   GithubStatus,
   GithubPr,
   GithubIssue,
+  PrDraft,
+  OpenPrReq,
+  OpenPrResp,
 } from "./types";
 
 const BASE = "";
@@ -231,4 +234,15 @@ export const api = {
 
   listGithubIssues: (projectId: string) =>
     request<GithubIssue[]>(`/api/projects/${projectId}/github/issues`),
+
+  // Plan 10b — PR creation endpoints
+
+  getPrDraft: (sessionId: string) =>
+    request<PrDraft>(`/api/sessions/${sessionId}/pr-draft`),
+
+  openPr: (sessionId: string, req: OpenPrReq) =>
+    request<OpenPrResp>(
+      `/api/sessions/${sessionId}/pr`,
+      { method: "POST", body: JSON.stringify(req) },
+    ),
 };

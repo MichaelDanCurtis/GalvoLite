@@ -32,6 +32,7 @@ export interface Session {
   est_tokens?: number;
   last_event_kind?: string;
   waiting_on?: string[] | null;
+  pr_url?: string | null; // Plan 10b — PR URL once "Open PR" has been used
 }
 
 /**
@@ -175,7 +176,8 @@ export type DomainEvent =
   | { type: "recommendation.created"; rec_id: string; project_id: string; severity: string }
   | { type: "recommendation.acted"; rec_id: string; action: string; route: string | null }
   | { type: "overseer.degraded"; project_id: string; reason: string }
-  | { type: "overseer.recovered"; project_id: string };
+  | { type: "overseer.recovered"; project_id: string }
+  | { type: "session.pr_created"; session_id: string; project_id: string; pr_url: string; pr_number: number };
 
 export interface Recommendation {
   id: string;
@@ -220,4 +222,24 @@ export interface GithubIssue {
   labels: string[];
   updated_at: string;
   url: string;
+}
+
+// Plan 10b — PR creation types
+export interface PrDraft {
+  title: string;
+  body: string;
+  base: string;
+  commits_ahead: number;
+  commits_behind: number;
+}
+
+export interface OpenPrReq {
+  title: string;
+  body: string;
+  base: string;
+}
+
+export interface OpenPrResp {
+  pr_url: string;
+  pr_number: number;
 }
