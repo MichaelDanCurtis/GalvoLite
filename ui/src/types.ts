@@ -243,3 +243,27 @@ export interface OpenPrResp {
   pr_url: string;
   pr_number: number;
 }
+
+// Plan 10c — PR review surfacing
+export interface PrReview {
+  id: number;
+  author: string;
+  state: string;
+  body: string;
+  submitted_at: string;
+  url: string;
+}
+
+export interface PrReviewComment {
+  id: number;
+  author: string;
+  body: string;
+  path: string;
+  line: number | null;
+  url: string;
+}
+
+export interface PrReviewsBundle {
+  reviews: PrReview[];
+  comments: PrReviewComment[];
+}

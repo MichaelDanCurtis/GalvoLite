@@ -18,6 +18,7 @@ import type {
   PrDraft,
   OpenPrReq,
   OpenPrResp,
+  PrReviewsBundle,
 } from "./types";
 
 const BASE = "";
@@ -245,4 +246,8 @@ export const api = {
       `/api/sessions/${sessionId}/pr`,
       { method: "POST", body: JSON.stringify(req) },
     ),
+
+  // Plan 10c — PR reviews
+  getPrReviews: (sessionId: string) =>
+    request<PrReviewsBundle>(`/api/sessions/${sessionId}/pr-reviews`),
 };
