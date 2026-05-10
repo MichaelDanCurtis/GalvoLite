@@ -204,6 +204,10 @@ impl Client {
     /// Returns the html_url + number on success; surfaces octocrab's
     /// error verbatim on failure (e.g. 422 if a PR already exists for
     /// the head branch on the remote, 404 if base branch missing).
+    // Single internal caller (open_pr handler); a builder/struct would be
+    // YAGNI for 8 args, all of which are required and all of which the
+    // caller already has in scope.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_pull_request(
         &self,
         owner: &str,
@@ -230,11 +234,24 @@ impl Client {
     }
 }
 
+/// Map an `octocrab::Error` into our two-variant `GithubError`.
+///
+/// `octocrab::Error` is non-exhaustive. Its `Display` impl only renders
+/// the variant name (e.g. "GitHub"), which is useless for surfacing 422
+/// validation errors to the UI; `Debug` includes the status code +
+/// response body, so we prefer it.
+///
+/// The `Network` vs `Api` split is best-effort: we substring-match the
+/// Debug repr for "connect" / "dns" / "timeout" rather than pattern-match
+/// the variant. This can misclassify if octocrab ever embeds those
+/// substrings in a non-network context (e.g. a GitHub error message that
+/// happens to contain the word "timeout"). For Plan 10b that's
+/// cosmetic — both variants are surfaced by current callers as a 502
+/// with the same string body, so the distinction is purely for log
+/// readability. If a future caller needs to differentiate (e.g. retry
+/// only on `Network`), tighten this to variant-pattern matching against
+/// `octocrab::Error::Hyper` / `octocrab::Error::Http` etc.
 fn map_err(e: octocrab::Error) -> GithubError {
-    // octocrab::Error is non-exhaustive. Its Display impl only renders the
-    // variant name (e.g. "GitHub") which is useless for surfacing 422
-    // validation errors to the UI; Debug includes status code + message
-    // body. Plan 10b — UI shows the raw string, so prefer Debug here.
     let s = format!("{e:?}");
     if s.contains("connect") || s.contains("dns") || s.contains("timeout") {
         GithubError::Network(s)

@@ -271,9 +271,20 @@ fn commit_log(worktree: &FsPath, base: &str) -> Vec<String> {
     .collect()
 }
 
-/// Build the PR body from session + worktree state. Branches on role:
-/// orchestrators get a Plan section sourced from `.galvolite/plan.md`;
-/// other roles get just the task summary + commit list.
+/// Build the PR body from session + worktree state. Top-level
+/// orchestrator sessions get a Plan section sourced from
+/// `.galvolite/plan.md`; child sessions get just the task summary +
+/// commit list.
+///
+/// Note on the orchestrator predicate: the `sessions.role` schema CHECK
+/// (migrations/0001_initial.sql) only allows
+/// `('implementation','brainstorm','scout','fix')` — `'orchestrator'`
+/// is never persisted as a role, it's a runtime profile signaled via
+/// `[ROLE:orchestrator]`. The codebase identifies orchestrator
+/// sessions structurally as top-level (no parent, not ended); see
+/// `SessionManager::find_orchestrator_for_project`. We follow the same
+/// convention here so the Plan section actually fires for top-level
+/// sessions that own a `.galvolite/plan.md`.
 fn build_pr_body(session: &crate::db::Session, worktree: &FsPath, base: &str) -> String {
     let mut body = format!("## Task\n{}\n\n## Commits\n", session.task_summary);
     let log = commit_log(worktree, base);
@@ -284,7 +295,7 @@ fn build_pr_body(session: &crate::db::Session, worktree: &FsPath, base: &str) ->
             body.push_str(&format!("- {line}\n"));
         }
     }
-    if session.role == "orchestrator" {
+    if session.parent_session_id.is_none() && session.ended_at.is_none() {
         let plan_path = worktree.join(".galvolite/plan.md");
         let plan = std::fs::read_to_string(&plan_path).unwrap_or_else(|_| "(no plan.md)".into());
         body.push_str("\n## Plan\n");
