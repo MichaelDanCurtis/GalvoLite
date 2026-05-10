@@ -66,6 +66,12 @@ export function useSessions() {
           next[i] = updated;
           return next;
         }
+        case "session.pr_created": {
+          const updated = { ...session, pr_url: e.pr_url };
+          const next = [...prev];
+          next[i] = updated;
+          return next;
+        }
         default:
           return prev;
       }
