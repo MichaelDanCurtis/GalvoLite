@@ -176,6 +176,30 @@ impl Client {
         Ok(repo.default_branch.unwrap_or_else(|| "main".to_string()))
     }
 
+    /// Plan 10b Task 4 — fetch the comma-separated `x-oauth-scopes`
+    /// header from `GET /user`. Returns Vec of trimmed scope strings,
+    /// or empty Vec if the header is absent (which can happen if the
+    /// PAT has no scopes set, common for fine-grained PATs).
+    ///
+    /// Uses octocrab's low-level `_get` so we get back the raw
+    /// `http::Response` and can read response headers — the typed
+    /// `current().user()` path only deserializes the body.
+    pub async fn token_scopes(&self) -> Result<Vec<String>, GithubError> {
+        let resp = self.inner._get("/user").await.map_err(map_err)?;
+        let scopes = resp
+            .headers()
+            .get("x-oauth-scopes")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| {
+                s.split(',')
+                    .map(|x| x.trim().to_string())
+                    .filter(|x| !x.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(scopes)
+    }
+
     /// Plan 10b — create a PR via `POST /repos/{owner}/{name}/pulls`.
     /// Returns the html_url + number on success; surfaces octocrab's
     /// error verbatim on failure (e.g. 422 if a PR already exists for

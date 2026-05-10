@@ -422,3 +422,40 @@ async fn default_branch_err_on_404() {
     let client = Client::with_token("t", Some(server.url())).unwrap();
     assert!(client.default_branch("octocat", "missing").await.is_err());
 }
+
+// ===== Plan 10b Task 4 — token_scopes (x-oauth-scopes header parsing) =====
+
+#[tokio::test]
+async fn token_scopes_parses_x_oauth_scopes_header() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("GET", "/user")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_header("x-oauth-scopes", "repo, read:org, workflow")
+        .with_body(mock_user_payload())
+        .create_async()
+        .await;
+
+    let client = Client::with_token("t", Some(server.url())).unwrap();
+    let scopes = client.token_scopes().await.unwrap();
+    assert!(scopes.contains(&"repo".to_string()));
+    assert!(scopes.contains(&"read:org".to_string()));
+    assert!(scopes.contains(&"workflow".to_string()));
+}
+
+#[tokio::test]
+async fn token_scopes_returns_empty_when_header_absent() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("GET", "/user")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(mock_user_payload())
+        .create_async()
+        .await;
+
+    let client = Client::with_token("t", Some(server.url())).unwrap();
+    let scopes = client.token_scopes().await.unwrap();
+    assert!(scopes.is_empty());
+}
