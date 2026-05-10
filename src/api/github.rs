@@ -190,6 +190,248 @@ pub async fn list_issues(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Plan 10b Task 5 — `GET /api/sessions/:id/pr-draft`.
+//
+// Computes a draft PR title/body for an operator to edit before submitting.
+// The body is built from session metadata + git shell-outs against the
+// session's worktree; orchestrator sessions also get a Plan section read
+// from `<worktree>/.galvolite/plan.md`. We never touch GitHub except for
+// `default_branch` (which falls back to "main" on error).
+// ---------------------------------------------------------------------------
+
+use std::path::Path as FsPath;
+
+#[derive(Debug, Serialize)]
+pub struct PrDraftResponse {
+    pub title: String,
+    pub body: String,
+    pub base: String,
+    pub commits_ahead: u32,
+    pub commits_behind: u32,
+}
+
+/// Run `git -C <worktree>` with the given args, return stdout as String.
+/// Returns empty string on any error (best-effort; PR draft computation
+/// continues even if the commit log can't be produced).
+fn git_capture(worktree: &FsPath, args: &[&str]) -> String {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args(args)
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                Some(String::from_utf8_lossy(&o.stdout).into_owned())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default()
+}
+
+/// Compute (commits_ahead, commits_behind) for `<base>...HEAD` in the given
+/// worktree. Returns (0, 0) on any git error. `git rev-list --left-right
+/// --count A...B` prints `<left> <right>` — left is commits reachable from
+/// A but not B (behind) and right is commits reachable from B but not A
+/// (ahead).
+fn commits_ahead_behind(worktree: &FsPath, base: &str) -> (u32, u32) {
+    let out = git_capture(
+        worktree,
+        &[
+            "rev-list",
+            "--left-right",
+            "--count",
+            &format!("{base}...HEAD"),
+        ],
+    );
+    let mut parts = out.split_whitespace();
+    let behind = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let ahead = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    (ahead, behind)
+}
+
+/// `git log --oneline --no-decorate -n 50 <base>..HEAD` — capped so we never
+/// return a runaway body.
+fn commit_log(worktree: &FsPath, base: &str) -> Vec<String> {
+    git_capture(
+        worktree,
+        &[
+            "log",
+            "--oneline",
+            "--no-decorate",
+            "-n",
+            "50",
+            &format!("{base}..HEAD"),
+        ],
+    )
+    .lines()
+    .map(|l| l.to_string())
+    .collect()
+}
+
+/// Build the PR body from session + worktree state. Branches on role:
+/// orchestrators get a Plan section sourced from `.galvolite/plan.md`;
+/// other roles get just the task summary + commit list.
+fn build_pr_body(session: &crate::db::Session, worktree: &FsPath, base: &str) -> String {
+    let mut body = format!("## Task\n{}\n\n## Commits\n", session.task_summary);
+    let log = commit_log(worktree, base);
+    if log.is_empty() {
+        body.push_str("(no commits ahead of base)\n");
+    } else {
+        for line in log {
+            body.push_str(&format!("- {line}\n"));
+        }
+    }
+    if session.role == "orchestrator" {
+        let plan_path = worktree.join(".galvolite/plan.md");
+        let plan = std::fs::read_to_string(&plan_path).unwrap_or_else(|_| "(no plan.md)".into());
+        body.push_str("\n## Plan\n");
+        body.push_str(&plan);
+    }
+    body
+}
+
+/// Truncate a string at a word boundary at or below `max` chars. Operates
+/// on chars (not bytes) so multibyte input doesn't split a codepoint.
+fn truncate_title(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    // Find last whitespace at or before max; if none, hard-cut at max-1.
+    let cap_idx = chars
+        .iter()
+        .enumerate()
+        .take(max)
+        .filter(|(_, c)| c.is_whitespace())
+        .map(|(i, _)| i)
+        .next_back()
+        .unwrap_or(max - 1);
+    chars.iter().take(cap_idx).collect::<String>().trim().to_string()
+}
+
+/// `GET /api/sessions/:id/pr-draft` — compute a draft PR title/body for
+/// an operator to edit before submitting. Returns 404 if the session is
+/// missing, the project has no linked repo, or the session has no branch;
+/// 503 if no GitHub token is configured. Never touches GitHub except for
+/// the `default_branch` lookup (which falls back to "main" on error).
+pub async fn pr_draft(
+    State(mgr): State<Arc<SessionManager>>,
+    Path(session_id): Path<Uuid>,
+) -> Response {
+    let (session, project) = match resolve_session_for_pr(&mgr, session_id) {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
+
+    let Some(repo_str) = project.github_repo.as_ref() else {
+        tracing::warn!(%session_id, "pr_draft: project has no linked repo");
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "no linked repo"})),
+        )
+            .into_response();
+    };
+    let Some((owner, name)) = parse_repo(repo_str) else {
+        tracing::warn!(%session_id, repo = %repo_str, "pr_draft: stored repo has bad format");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "stored repo has bad format"})),
+        )
+            .into_response();
+    };
+    if session.branch.as_deref().is_none() {
+        tracing::warn!(%session_id, "pr_draft: session has no branch");
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "session has no branch"})),
+        )
+            .into_response();
+    }
+
+    let Some(client) = crate::github::Client::from_env() else {
+        tracing::warn!(%session_id, "pr_draft: GITHUB_TOKEN not set");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "GITHUB_TOKEN not set on server"})),
+        )
+            .into_response();
+    };
+
+    // Default base: ask GitHub; fall back to "main" on error so the
+    // operator still gets a usable draft if the API blip-fails.
+    let base = match client.default_branch(owner, name).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error = %e, "pr_draft: default_branch lookup failed; falling back to 'main'");
+            "main".to_string()
+        }
+    };
+
+    let worktree = std::path::PathBuf::from(&session.worktree_path);
+    let (commits_ahead, commits_behind) = commits_ahead_behind(&worktree, &base);
+    let body = build_pr_body(&session, &worktree, &base);
+    let title = truncate_title(&session.task_summary, 72);
+
+    Json(PrDraftResponse {
+        title,
+        body,
+        base,
+        commits_ahead,
+        commits_behind,
+    })
+    .into_response()
+}
+
+/// Helper: load session + parent project, returning the appropriate
+/// error response on missing session/project or DB failure. Mirrors the
+/// `resolve_linked_repo` shape but works at session granularity since
+/// the pr-draft handler keys off a session id, not a project id.
+#[allow(
+    clippy::result_large_err,
+    reason = "boundary-type Response is consumed at the handler immediately, no cloning"
+)]
+fn resolve_session_for_pr(
+    mgr: &Arc<SessionManager>,
+    session_id: Uuid,
+) -> Result<(crate::db::Session, crate::db::Project), Response> {
+    let session = match mgr.db().get_session(session_id) {
+        Ok(s) => s,
+        Err(crate::error::Error::SessionNotFound(_))
+        | Err(crate::error::Error::Db(rusqlite::Error::QueryReturnedNoRows)) => {
+            tracing::warn!(%session_id, "pr_draft: session not found");
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "session not found"})),
+            )
+                .into_response());
+        }
+        Err(e) => {
+            tracing::warn!(%session_id, error = %e, "pr_draft: session lookup failed");
+            return Err(crate::api::err_to_response(e));
+        }
+    };
+    let project = match mgr.db().get_project(session.project_id) {
+        Ok(p) => p,
+        Err(crate::error::Error::ProjectNotFound(_))
+        | Err(crate::error::Error::Db(rusqlite::Error::QueryReturnedNoRows)) => {
+            tracing::warn!(%session_id, project_id = %session.project_id, "pr_draft: parent project not found");
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "project not found"})),
+            )
+                .into_response());
+        }
+        Err(e) => {
+            tracing::warn!(%session_id, error = %e, "pr_draft: project lookup failed");
+            return Err(crate::api::err_to_response(e));
+        }
+    };
+    Ok((session, project))
+}
+
 /// Helper: fetch the project, parse its linked repo, return owner+name.
 /// Folds all error cases (project not found, no linked repo, malformed
 /// stored repo) into pre-built `Response` values so the call sites stay
