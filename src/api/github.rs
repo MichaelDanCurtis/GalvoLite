@@ -524,6 +524,94 @@ pub async fn open_pr(
     .into_response()
 }
 
+// ---------------------------------------------------------------------------
+// Plan 10c — `GET /api/sessions/:id/pr-reviews`.
+//
+// Returns top-level reviews + inline comments for the session's linked PR.
+// 404 if session has no pr_url; 503 if no token; 502 on GitHub error;
+// 500 if the stored repo or pr_url has an unexpected shape.
+// ---------------------------------------------------------------------------
+
+/// Plan 10c — extract PR number from a GitHub PR URL.
+/// Matches `https://github.com/<owner>/<name>/pull/<number>` (with or
+/// without trailing path/fragment). Returns None if shape unexpected.
+fn parse_pr_number(url: &str) -> Option<u64> {
+    let after_pull = url.split("/pull/").nth(1)?;
+    let num_str: String = after_pull
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    num_str.parse().ok()
+}
+
+/// `GET /api/sessions/:id/pr-reviews` — returns reviews + inline comments
+/// for the session's linked PR. 404 if session has no pr_url; 503 if no
+/// token; 502 on GitHub error; 500 if pr_url has unexpected shape.
+pub async fn pr_reviews(
+    State(mgr): State<Arc<SessionManager>>,
+    Path(session_id): Path<Uuid>,
+) -> Response {
+    let (session, project) = match resolve_session_for_pr(&mgr, session_id) {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
+
+    let Some(pr_url) = session.pr_url.as_deref() else {
+        tracing::warn!(%session_id, "pr_reviews: session has no PR url");
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "no PR for this session"})),
+        )
+            .into_response();
+    };
+    let Some(pr_number) = parse_pr_number(pr_url) else {
+        tracing::warn!(%session_id, %pr_url, "pr_reviews: pr_url has unexpected shape");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "could not parse PR number from url"})),
+        )
+            .into_response();
+    };
+
+    let Some(repo_str) = project.github_repo.as_ref() else {
+        tracing::warn!(%session_id, "pr_reviews: project has no linked repo");
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "no linked repo"})),
+        )
+            .into_response();
+    };
+    let Some((owner, name)) = parse_repo(repo_str) else {
+        tracing::warn!(%session_id, repo = %repo_str, "pr_reviews: stored repo has bad format");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "stored repo has bad format"})),
+        )
+            .into_response();
+    };
+
+    let Some(client) = crate::github::Client::from_env() else {
+        tracing::warn!(%session_id, "pr_reviews: GITHUB_TOKEN not set");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "GITHUB_TOKEN not set on server"})),
+        )
+            .into_response();
+    };
+
+    match client.list_pr_reviews(owner, name, pr_number).await {
+        Ok(bundle) => Json(bundle).into_response(),
+        Err(e) => {
+            tracing::warn!(%session_id, %pr_number, error = %e, "list_pr_reviews failed");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": format!("{e}")})),
+            )
+                .into_response()
+        }
+    }
+}
+
 /// Helper: load session + parent project, returning the appropriate
 /// error response on missing session/project or DB failure. Mirrors the
 /// `resolve_linked_repo` shape but works at session granularity since
