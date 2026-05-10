@@ -7,5 +7,8 @@
 pub mod client;
 pub mod push;
 
-pub use client::{Client, IssueSummary, PrInfo, PrSummary, User};
+pub use client::{
+    Client, IssueSummary, PrInfo, PrReviewsBundle, PrSummary, ReviewCommentSummary, ReviewSummary,
+    User,
+};
 pub use push::PushError;

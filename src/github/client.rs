@@ -43,6 +43,35 @@ pub struct PrInfo {
     pub html_url: String,
 }
 
+/// Plan 10c — top-level PR review summary (one per submitted review).
+#[derive(Debug, Clone, Serialize)]
+pub struct ReviewSummary {
+    pub id: u64,
+    pub author: String,
+    pub state: String, // APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | PENDING
+    pub body: String,
+    pub submitted_at: String, // RFC 3339; empty if pending
+    pub url: String,          // html_url
+}
+
+/// Plan 10c — inline review comment (anchored to a file/line).
+#[derive(Debug, Clone, Serialize)]
+pub struct ReviewCommentSummary {
+    pub id: u64,
+    pub author: String,
+    pub body: String,
+    pub path: String,
+    pub line: Option<u64>, // None for outdated/file-level comments
+    pub url: String,
+}
+
+/// Plan 10c — combined bundle returned to the dashboard.
+#[derive(Debug, Clone, Serialize)]
+pub struct PrReviewsBundle {
+    pub reviews: Vec<ReviewSummary>,
+    pub comments: Vec<ReviewCommentSummary>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum GithubError {
     #[error("github api: {0}")]
@@ -198,6 +227,61 @@ impl Client {
             })
             .unwrap_or_default();
         Ok(scopes)
+    }
+
+    /// Plan 10c — fetch top-level reviews + inline comments for a PR
+    /// in parallel via `tokio::join!`. Returns both halves as a single
+    /// bundle. On either fetch failing, returns the first error
+    /// encountered.
+    pub async fn list_pr_reviews(
+        &self,
+        owner: &str,
+        name: &str,
+        pr_number: u64,
+    ) -> Result<PrReviewsBundle, GithubError> {
+        // Bind the `pulls` builders to local variables so they outlive the
+        // futures created from them — the underlying `ListReviewsBuilder` /
+        // `ListCommentsBuilder` borrow from the `PullRequestHandler`, so the
+        // handler must live until the futures resolve.
+        let pulls_a = self.inner.pulls(owner, name);
+        let pulls_b = self.inner.pulls(owner, name);
+        let reviews_fut = pulls_a.list_reviews(pr_number).send();
+        let comments_fut = pulls_b.list_comments(Some(pr_number)).send();
+        let (reviews_res, comments_res) = tokio::join!(reviews_fut, comments_fut);
+
+        let reviews_page = reviews_res.map_err(map_err)?;
+        let comments_page = comments_res.map_err(map_err)?;
+
+        let reviews: Vec<ReviewSummary> = reviews_page
+            .items
+            .into_iter()
+            .map(|r| ReviewSummary {
+                id: r.id.into_inner(),
+                author: r.user.map(|u| u.login).unwrap_or_default(),
+                state: r
+                    .state
+                    .map(|s| format!("{s:?}").to_uppercase())
+                    .unwrap_or_else(|| "PENDING".into()),
+                body: r.body.unwrap_or_default(),
+                submitted_at: r.submitted_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
+                url: r.html_url.to_string(),
+            })
+            .collect();
+
+        let comments: Vec<ReviewCommentSummary> = comments_page
+            .items
+            .into_iter()
+            .map(|c| ReviewCommentSummary {
+                id: c.id.into_inner(),
+                author: c.user.map(|u| u.login).unwrap_or_default(),
+                body: c.body,
+                path: c.path,
+                line: c.line.or(c.original_line),
+                url: c.html_url,
+            })
+            .collect();
+
+        Ok(PrReviewsBundle { reviews, comments })
     }
 
     /// Plan 10b — create a PR via `POST /repos/{owner}/{name}/pulls`.
