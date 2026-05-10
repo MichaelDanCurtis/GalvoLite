@@ -12,6 +12,7 @@ import { MetaTab } from "./MetaTab";
 import { DirectiveTab } from "./DirectiveTab";
 import { TabPanel } from "./TabPanel";
 import { OpenPrModal } from "./modals/OpenPrModal";
+import { PrReviewsPanel } from "./PrReviewsPanel";
 
 type Tab = "terminal" | "events" | "plan" | "meta" | "directive";
 
@@ -211,6 +212,11 @@ export function ExpandedSessionView({
             );
           })}
         </div>
+        {session.pr_url && (
+          <div className="px-4 pt-2">
+            <PrReviewsPanel sessionId={session.id} />
+          </div>
+        )}
         <div className="flex flex-1 min-h-0">
           <div className="flex-1 min-w-0">
             {tab === "terminal" && (
