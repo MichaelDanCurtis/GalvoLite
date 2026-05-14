@@ -16,6 +16,7 @@ pub mod plan;
 pub mod postmortems;
 pub mod recommendations;
 pub mod spawn;
+pub mod webhook;
 
 use crate::session_manager::SessionManager;
 use axum::extract::{Path, State};
@@ -84,6 +85,7 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route("/api/sessions/:id/pr-draft", get(github::pr_draft))
         .route("/api/sessions/:id/pr", post(github::open_pr))
         .route("/api/sessions/:id/pr-reviews", get(github::pr_reviews))
+        .route("/api/github/webhook", post(webhook::webhook_handler))
         .route("/mcp", post(crate::mcp::transport::handle))
         .layer(CorsLayer::permissive())
         .with_state(mgr);

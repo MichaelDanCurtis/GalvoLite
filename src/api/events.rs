@@ -104,6 +104,19 @@ pub enum DomainEvent {
     ProjectAdded { project_id: Uuid },
     #[serde(rename = "project.deleted")]
     ProjectDeleted { project_id: Uuid },
+    #[serde(rename = "github.pull_request_merged")]
+    PullRequestMerged {
+        project_id: Uuid,
+        pr_url: String,
+        pr_number: u64,
+    },
+    #[serde(rename = "github.issue_opened")]
+    IssueOpened {
+        project_id: Uuid,
+        issue_url: String,
+        issue_number: u64,
+        title: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -165,7 +178,9 @@ impl DomainEvent {
             | DomainEvent::OverseerDegraded { .. }
             | DomainEvent::OverseerRecovered { .. }
             | DomainEvent::ProjectAdded { .. }
-            | DomainEvent::ProjectDeleted { .. } => false,
+            | DomainEvent::ProjectDeleted { .. }
+            | DomainEvent::PullRequestMerged { .. }
+            | DomainEvent::IssueOpened { .. } => false,
         }
     }
 }
