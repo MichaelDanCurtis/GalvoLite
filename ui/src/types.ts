@@ -178,7 +178,9 @@ export type DomainEvent =
   | { type: "recommendation.acted"; rec_id: string; action: string; route: string | null }
   | { type: "overseer.degraded"; project_id: string; reason: string }
   | { type: "overseer.recovered"; project_id: string }
-  | { type: "session.pr_created"; session_id: string; project_id: string; pr_url: string; pr_number: number };
+  | { type: "session.pr_created"; session_id: string; project_id: string; pr_url: string; pr_number: number }
+  | { type: "github.pull_request_merged"; project_id: string; pr_url: string; pr_number: number }
+  | { type: "github.issue_opened"; project_id: string; issue_url: string; issue_number: number; title: string };
 
 export interface Recommendation {
   id: string;
