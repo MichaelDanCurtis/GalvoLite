@@ -186,6 +186,11 @@ export const api = {
     return `${proto}//${window.location.host}/api/sessions/${id}/terminal`;
   },
 
+  projectEventsWsUrl: (projectId: string): string => {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${window.location.host}/api/projects/${projectId}/events`;
+  },
+
   executePlan: (projectId: string) =>
     request<{ spawned: string[] }>(
       `/api/projects/${projectId}/execute-plan`,

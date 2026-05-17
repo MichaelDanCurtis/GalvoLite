@@ -183,4 +183,102 @@ impl DomainEvent {
             | DomainEvent::IssueOpened { .. } => false,
         }
     }
+
+    /// True if this event is scoped to (or fan-outs to) the given project.
+    /// The per-project dashboard WebSocket uses this to filter the global
+    /// event bus down to the per-project text-frame channel. The match is
+    /// exhaustive (no wildcard arm) so future variants force a compile error
+    /// here — opt in by extracting `project_id` from the payload.
+    pub fn applies_to_project(&self, pid: Uuid) -> bool {
+        match self {
+            DomainEvent::IssueOpened { project_id, .. }
+            | DomainEvent::PullRequestMerged { project_id, .. }
+            | DomainEvent::SessionPrCreated { project_id, .. }
+            | DomainEvent::ProjectAdded { project_id, .. }
+            | DomainEvent::ProjectDeleted { project_id, .. }
+            | DomainEvent::OverseerDegraded { project_id, .. }
+            | DomainEvent::OverseerRecovered { project_id, .. }
+            | DomainEvent::DirectiveChanged { project_id, .. }
+            | DomainEvent::PostmortemWritten { project_id, .. }
+            | DomainEvent::DecisionRecorded { project_id, .. }
+            | DomainEvent::PhaseReviewNeeded { project_id, .. }
+            | DomainEvent::PhaseAdvanced { project_id, .. }
+            | DomainEvent::RecommendationCreated { project_id, .. } => *project_id == pid,
+            DomainEvent::SessionStateChanged { .. }
+            | DomainEvent::SessionEventAppended { .. }
+            | DomainEvent::SessionRoleChanged { .. }
+            | DomainEvent::SessionMetaChanged { .. }
+            | DomainEvent::SessionPlanReplaced { .. }
+            | DomainEvent::SessionPlanStepChanged { .. }
+            | DomainEvent::OperatorPrompt { .. }
+            | DomainEvent::OperatorToast { .. }
+            | DomainEvent::SessionResumed { .. }
+            | DomainEvent::SessionChildrenResolved { .. }
+            | DomainEvent::RecommendationActed { .. } => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod applies_to_project_tests {
+    use super::*;
+
+    fn p() -> Uuid { Uuid::new_v4() }
+    fn s() -> Uuid { Uuid::new_v4() }
+
+    #[test]
+    fn matches_issue_opened_on_same_project_id() {
+        let pid = p();
+        let evt = DomainEvent::IssueOpened {
+            project_id: pid, issue_url: "u".into(), issue_number: 1, title: "t".into(),
+        };
+        assert!(evt.applies_to_project(pid));
+        assert!(!evt.applies_to_project(Uuid::new_v4()));
+    }
+
+    #[test]
+    fn matches_pull_request_merged_on_same_project_id() {
+        let pid = p();
+        let evt = DomainEvent::PullRequestMerged {
+            project_id: pid, pr_url: "u".into(), pr_number: 1,
+        };
+        assert!(evt.applies_to_project(pid));
+        assert!(!evt.applies_to_project(Uuid::new_v4()));
+    }
+
+    #[test]
+    fn matches_session_pr_created_dual_scoped() {
+        let pid = p();
+        let sid = s();
+        let evt = DomainEvent::SessionPrCreated {
+            session_id: sid, project_id: pid, pr_url: "u".into(), pr_number: 1,
+        };
+        // Project-scoped match
+        assert!(evt.applies_to_project(pid));
+        // Session-scoped match (existing behavior preserved)
+        assert!(evt.applies_to(sid));
+        // Neither matches
+        assert!(!evt.applies_to_project(Uuid::new_v4()));
+        assert!(!evt.applies_to(Uuid::new_v4()));
+    }
+
+    #[test]
+    fn matches_project_lifecycle_variants() {
+        let pid = p();
+        assert!(DomainEvent::ProjectAdded { project_id: pid }.applies_to_project(pid));
+        assert!(DomainEvent::ProjectDeleted { project_id: pid }.applies_to_project(pid));
+        assert!(DomainEvent::OverseerDegraded { project_id: pid, reason: "r".into() }
+            .applies_to_project(pid));
+        assert!(DomainEvent::OverseerRecovered { project_id: pid }.applies_to_project(pid));
+    }
+
+    #[test]
+    fn does_not_match_session_only_variants() {
+        let pid = p();
+        let sid = s();
+        let evt = DomainEvent::SessionRoleChanged { session_id: sid, role: "implementation".into() };
+        assert!(!evt.applies_to_project(pid));
+        let evt2 = DomainEvent::OperatorToast { session_id: sid, level: "info".into(), message: "x".into() };
+        assert!(!evt2.applies_to_project(pid));
+    }
 }

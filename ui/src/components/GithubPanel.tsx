@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { api } from "../api";
-import type { GithubPr, GithubIssue } from "../types";
+import { useProjectEvents } from "../hooks/useProjectEvents";
+import type { GithubPr, GithubIssue, DomainEvent } from "../types";
 
 interface Props {
   projectId: string;
@@ -55,6 +56,25 @@ export function GithubPanel({ projectId, repo }: Props) {
     // changes can't write back to state with stale data.
     return () => { latestRun.current++; };
   }, [fetchAll]);
+
+  // Plan 10f: auto-refresh when GitHub events arrive for this project.
+  useProjectEvents(projectId, {
+    onEvent: useCallback((evt: DomainEvent) => {
+      switch (evt.type) {
+        case "github.issue_opened":
+          fetchAll();
+          break;
+        case "github.pull_request_merged":
+        case "session.pr_created":
+          fetchAll();
+          break;
+        default:
+          // Other project-scoped events (overseer.*, postmortem.*, etc.)
+          // aren't surfaced by this panel.
+          break;
+      }
+    }, [fetchAll]),
+  });
 
   return (
     <div className="border border-neutral-700 rounded p-3 mt-2">
