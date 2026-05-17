@@ -85,6 +85,7 @@ pub fn router(mgr: Arc<SessionManager>) -> Router {
         .route("/api/sessions/:id/pr-draft", get(github::pr_draft))
         .route("/api/sessions/:id/pr", post(github::open_pr))
         .route("/api/sessions/:id/pr-reviews", get(github::pr_reviews))
+        .route("/api/projects/:id/events", get(project_events_ws))
         .route("/api/github/webhook", post(webhook::webhook_handler))
         .route("/mcp", post(crate::mcp::transport::handle))
         .layer(CorsLayer::permissive())
@@ -504,6 +505,94 @@ async fn handle_terminal_ws(
         _ = writer_task => {},
         _ = pty_pump => {},
         _ = reader => {},
+        _ = event_forwarder => {},
+    }
+}
+
+/// `GET /api/projects/:id/events` — per-project DomainEvent WebSocket
+/// (Plan 10f). Subscribes to the global event bus and fans out only
+/// events for which `applies_to_project(id)` returns true. Unidirectional:
+/// no client→server frames are processed (Close terminates the socket).
+///
+/// Returns 404 before the WS upgrade if the project id is unknown.
+async fn project_events_ws(
+    State(mgr): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    ws: axum::extract::WebSocketUpgrade,
+) -> Response {
+    if let Err(e) = mgr.get_project(id) {
+        return err_to_response(e);
+    }
+    ws.on_upgrade(move |socket| handle_project_events_ws(socket, mgr, id))
+        .into_response()
+}
+
+async fn handle_project_events_ws(
+    socket: axum::extract::ws::WebSocket,
+    mgr: AppState,
+    project_id: uuid::Uuid,
+) {
+    use axum::extract::ws::Message;
+    use futures_util::{sink::SinkExt, stream::StreamExt};
+
+    let (mut sink, mut stream) = socket.split();
+
+    // Funnel: writer_task owns the sink; event_forwarder + close_watcher
+    // both push into a bounded mpsc. Matches the terminal_ws pattern but
+    // without the PTY pump and without client-frame processing.
+    let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel::<Message>(256);
+
+    let writer_task = async move {
+        while let Some(msg) = frame_rx.recv().await {
+            if sink.send(msg).await.is_err() {
+                break;
+            }
+        }
+    };
+
+    // Reader half: drain incoming frames so the socket terminates on Close.
+    // Any non-Close inbound frame is silently dropped (no client→server
+    // protocol on this WS).
+    let close_watcher = async move {
+        while let Some(Ok(msg)) = stream.next().await {
+            if matches!(msg, Message::Close(_)) {
+                break;
+            }
+        }
+    };
+
+    let mut event_rx = mgr.subscribe_events();
+    let evt_tx = frame_tx.clone();
+    let event_forwarder = async move {
+        loop {
+            match event_rx.recv().await {
+                Ok(evt) => {
+                    if !evt.applies_to_project(project_id) {
+                        continue;
+                    }
+                    let json = match serde_json::to_string(&evt) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "project-event serialization failed; dropping frame");
+                            continue;
+                        }
+                    };
+                    if evt_tx.send(Message::Text(json)).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+
+    // Drop the original sender so writer_task exits once all clones drop.
+    drop(frame_tx);
+
+    tokio::select! {
+        _ = writer_task => {},
+        _ = close_watcher => {},
         _ = event_forwarder => {},
     }
 }
