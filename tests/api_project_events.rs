@@ -18,14 +18,16 @@ where
 {
     let fut = async {
         loop {
-            match ws.next().await.unwrap().unwrap() {
-                Message::Text(t) => {
+            match ws.next().await {
+                Some(Ok(Message::Text(t))) => {
                     let v: serde_json::Value = serde_json::from_str(&t).unwrap();
                     if predicate(&v) {
                         return v;
                     }
                 }
-                _ => continue,
+                Some(Ok(_)) => continue, // non-text frame; skip
+                Some(Err(e)) => panic!("ws error while waiting for matching frame: {e}"),
+                None => panic!("ws stream closed before matching frame arrived"),
             }
         }
     };
@@ -46,14 +48,16 @@ async fn assert_no_text_frame<F>(
 {
     let fut = async {
         loop {
-            match ws.next().await.unwrap().unwrap() {
-                Message::Text(t) => {
+            match ws.next().await {
+                Some(Ok(Message::Text(t))) => {
                     let v: serde_json::Value = serde_json::from_str(&t).unwrap();
                     if predicate(&v) {
                         panic!("unexpected matching frame arrived: {v}");
                     }
                 }
-                _ => continue,
+                Some(Ok(_)) => continue,
+                Some(Err(e)) => panic!("ws error during negative assertion: {e}"),
+                None => panic!("ws closed during negative assertion — cannot conclude absence"),
             }
         }
     };
