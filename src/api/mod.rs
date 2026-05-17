@@ -520,8 +520,20 @@ async fn project_events_ws(
     Path(id): Path<uuid::Uuid>,
     ws: axum::extract::WebSocketUpgrade,
 ) -> Response {
+    use crate::error::Error;
     if let Err(e) = mgr.get_project(id) {
-        return err_to_response(e);
+        // Normalize both explicit ProjectNotFound and the raw
+        // "no row" sqlite error to 404 + JSON body, matching the
+        // contract used by other project endpoints (src/api/github.rs).
+        return match &e {
+            Error::ProjectNotFound(_)
+            | Error::Db(rusqlite::Error::QueryReturnedNoRows) => (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "project not found"})),
+            )
+                .into_response(),
+            _ => err_to_response(e),
+        };
     }
     ws.on_upgrade(move |socket| handle_project_events_ws(socket, mgr, id))
         .into_response()
