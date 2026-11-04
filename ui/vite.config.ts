@@ -6,10 +6,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": {
-        target: "http://localhost:3001",
-        ws: true,
-      },
+      "/api": { target: "http://localhost:3001", ws: true },
+      "/operator": { target: "http://localhost:3001" },
+      "/mcp": { target: "http://localhost:3001" },
+      "/hooks": { target: "http://localhost:3001" },
     },
   },
   build: {
